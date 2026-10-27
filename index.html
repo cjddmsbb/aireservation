@@ -1,0 +1,1911 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#147366">
+  <title>학교공간 · 특별실 예약</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@0.577.0"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "data:text/javascript,const R=window.React;export default R;export const {Children,Component,Fragment,PureComponent,StrictMode,Suspense,cloneElement,createContext,createElement,createFactory,createRef,forwardRef,isValidElement,lazy,memo,startTransition,useCallback,useContext,useDebugValue,useDeferredValue,useEffect,useId,useImperativeHandle,useInsertionEffect,useLayoutEffect,useMemo,useReducer,useRef,useState,useSyncExternalStore,useTransition,version}=R;",
+        "lucide-react": "https://esm.sh/lucide-react@0.577.0?external=react"
+      }
+    }
+  </script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { brand: '#147366', ink: '#253532', paper: '#f6f8f7', line: '#e2e8e5' },
+          fontFamily: { sans: ['Pretendard Variable', 'Pretendard', 'sans-serif'] },
+          boxShadow: { soft: '0 2px 8px rgba(25,49,39,.035)' }
+        }
+      }
+    };
+  </script>
+  <style>
+    body { margin: 0; background: #f6f8f7; color: #253532; }
+    button, input, select { -webkit-tap-highlight-color: transparent; }
+    button, a, input, select, textarea { outline-offset: 3px; }
+    :is(button,a,input,select,textarea):focus-visible { outline: 2px solid #147366; outline-offset: 3px; }
+    button { touch-action: manipulation; }
+    input, select, textarea { min-width: 0; }
+    .fixed-slot {
+      background-image: repeating-linear-gradient(-45deg,transparent,transparent 5px,rgba(100,116,109,.028) 5px,rgba(100,116,109,.028) 7px);
+    }
+    .calendar-grid { display: grid; grid-template-columns: 68px repeat(5,minmax(0,1fr)); }
+    .day-grid { display: grid; grid-template-columns: 68px minmax(0,1fr); }
+    .scrollbar { scrollbar-width: thin; scrollbar-color: #cbd5d0 transparent; }
+    @keyframes enter {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-enter { animation: enter .18s ease-out; }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body class="font-sans text-sm antialiased">
+  <div id="root"></div>
+  <noscript>특별실 예약을 사용하려면 브라우저에서 자바스크립트를 허용해 주세요.</noscript>
+
+  <script type="text/babel" data-type="module" data-presets="react">
+    import {
+      Layers, Calendar, ChevronRight, ChevronDown, Plus, X, Menu, Monitor,
+      Music, Check, Clock, Lock, User, ArrowRight, Cloud, Info, Download,
+      CheckCircle, AlertCircle, Loader2, RefreshCw, MapPin, Grid, Copy,
+      Database, Settings, Edit, Trash2
+    } from 'lucide-react';
+
+    const { useState, useEffect, useRef } = React;
+
+    const defaultRooms = [
+      { id: 'computer', name: '컴퓨터실', location: '본관 3층', capacity: 30, description: '학생용 PC 30대 · 전자칠판' },
+      { id: 'science', name: '과학실', location: '본관 2층', capacity: 28, description: '실험대 7개 · 실물화상기' },
+      { id: 'music', name: '음악실', location: '별관 2층', capacity: 32, description: '디지털 피아노 · 음향 장비' },
+      { id: 'library', name: '도서실', location: '본관 1층', capacity: 24, description: '모둠 테이블 · 수업용 화면' }
+    ];
+    const roomIcon = room => ({
+      computer: Monitor, science: Grid, music: Music, library: Layers
+    }[room?.id] || Grid);
+    const periods = [
+      ['09:00','09:45'], ['09:55','10:40'], ['10:50','11:35'], ['11:45','12:30'],
+      ['13:30','14:15'], ['14:25','15:10'], ['15:20','16:05'], ['16:15','17:00']
+    ];
+    const dayNames = ['월','화','수','목','금'];
+    const storageKey = 'school-space-reservations-v1';
+    const isHosted = !!window.google?.script?.run;
+    const formatNumber = n => new Intl.NumberFormat('ko-KR').format(n);
+    const iso = value => {
+      const d = new Date(value);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    };
+    const parseDate = value => new Date(value+'T12:00:00');
+    const addDays = (value,count) => {
+      const d = new Date(value);
+      d.setDate(d.getDate()+count);
+      return d;
+    };
+    const monday = value => {
+      const d = new Date(value);
+      d.setHours(12,0,0,0);
+      return addDays(d,-((d.getDay()+6)%7));
+    };
+    const fullDate = value => new Intl.DateTimeFormat('ko-KR',{
+      month:'long',day:'numeric',weekday:'long'
+    }).format(typeof value==='string'?parseDate(value):value);
+    const makeId = () => window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const inputClass = 'w-full rounded-lg border border-line bg-white px-3 py-2.5 text-sm text-ink placeholder:text-slate-400';
+    const primaryClass = 'inline-flex items-center justify-center gap-2 rounded-lg bg-brand px-4 py-2.5 font-semibold text-white hover:bg-[#0d5c51] active:scale-[.98] transition-colors disabled:cursor-not-allowed disabled:opacity-60';
+    const secondaryClass = 'inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-white px-3.5 py-2.5 font-medium hover:bg-paper transition-colors disabled:cursor-not-allowed disabled:opacity-50';
+    const emptyData = () => ({rooms:[],rules:[],bookings:[],updatedAt:null,revision:-1});
+
+    function initialData() {
+      const start = monday(new Date());
+      const year = start.getFullYear();
+      const rule = (id,roomId,days,startPeriod,endPeriod,purpose,teacher) => ({
+        id,roomId,days,startPeriod,endPeriod,purpose,teacher,
+        startDate:`${year}-01-01`,endDate:`${year}-12-31`
+      });
+      const booking = (id,day,period,purpose,teacher,className) => ({
+        id,roomId:'computer',date:iso(addDays(start,day)),period,purpose,teacher,className
+      });
+      return {
+        rooms:defaultRooms.map(r=>({...r})),
+        rules:[
+          rule('fixed-1','computer',[0],2,3,'5학년 정보 수업','김민준'),
+          rule('fixed-2','computer',[2],3,4,'6학년 정보 수업','이서연'),
+          rule('fixed-3','computer',[4],1,2,'4학년 정보 수업','박지훈'),
+          rule('fixed-4','computer',[1],4,5,'디지털 기초 수업','정수빈'),
+          rule('fixed-5','science',[1,3],2,3,'5학년 과학 수업','최유진'),
+          rule('fixed-6','music',[0,2],4,4,'6학년 음악 수업','한지우'),
+          rule('fixed-7','library',[4],3,4,'학년별 독서 수업','윤서진')
+        ],
+        bookings:[
+          booking('booking-1',0,5,'자료 조사 및 발표 준비','이서연','6학년 2반'),
+          booking('booking-2',1,2,'우리 동네 소개 자료 만들기','박지훈','4학년 1반'),
+          booking('booking-3',2,6,'코딩 동아리','김민준','방과후 동아리'),
+          booking('booking-4',3,3,'디지털 시민교육','최유진','5학년 3반'),
+          booking('booking-5',3,4,'디지털 시민교육','최유진','5학년 3반'),
+          booking('booking-6',4,7,'교내 연수 자료 제작','정수빈','교원 연수')
+        ],
+        updatedAt:null,revision:0
+      };
+    }
+
+    function getSlot(data,roomId,date,period) {
+      const weekday = (parseDate(date).getDay()+6)%7;
+      const fixed = data.rules.find(r=>r.roomId===roomId&&r.days.includes(weekday)&&
+        date>=r.startDate&&date<=r.endDate&&period>=r.startPeriod&&period<=r.endPeriod);
+      if(fixed)return {type:'fixed',entry:fixed};
+      const booked = data.bookings.find(b=>b.roomId===roomId&&b.date===date&&b.period===period);
+      return booked?{type:'booked',entry:booked}:{type:'free',entry:null};
+    }
+
+    function callServer(method,payload) {
+      return new Promise((resolve,reject)=>{
+        if(!isHosted){reject(new Error('Apps Script로 배포한 주소에서만 공용 저장 기능을 사용할 수 있습니다.'));return;}
+        const runner = window.google.script.run.withSuccessHandler(resolve)
+          .withFailureHandler(error=>reject(new Error(error?.message||'서버 요청에 실패했습니다. 다시 확인해 주세요.')));
+        switch(method){
+          case 'getInitialState':runner.getInitialState();break;
+          case 'createBooking':runner.createBooking(payload);break;
+          case 'cancelBooking':runner.cancelBooking(payload);break;
+          case 'createRule':runner.createRule(payload);break;
+          case 'deleteRule':runner.deleteRule(payload);break;
+          case 'createRoom':runner.createRoom(payload);break;
+          case 'updateRoom':runner.updateRoom(payload);break;
+          case 'deleteRoom':runner.deleteRoom(payload);break;
+          default:reject(new Error('지원하지 않는 요청입니다.'));
+        }
+      });
+    }
+
+    // 설치 안내에서 복사하거나 내려받는 Apps Script 서버 코드입니다.
+    const serverCode = String.raw`/**
+ * 학교공간 · Apps Script 서버
+ * 스프레드시트에 연결된 Code.gs에 전체를 붙여 넣으세요.
+ * 화면 HTML 파일 이름은 index입니다.
+ * 기존 설치도 교체 후 setupBookingSystem을 다시 실행하세요.
+ */
+var BOOKING_SHEET_ = '예약';
+var RULE_SHEET_ = '고정시간표';
+var ROOM_SHEET_ = '특별실';
+var BOOKING_HEADERS_ = [
+  '예약번호','특별실','날짜','교시','사용목적',
+  '예약자명','학급','예약자이메일','생성일시'
+];
+var RULE_HEADERS_ = [
+  '시간표번호','특별실','요일','시작교시','종료교시',
+  '시작일','종료일','수업명','담당교사','등록자이메일','생성일시'
+];
+var ROOM_HEADERS_ = ['특별실번호','특별실명','위치','정원','시설안내'];
+
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile('index')
+    .setTitle('학교공간 · 특별실 예약')
+    .addMetaTag('viewport','width=device-width, initial-scale=1');
+}
+
+function setupBookingSystem() {
+  var book = SpreadsheetApp.getActiveSpreadsheet();
+  if (!book) throw new Error('스프레드시트의 확장 프로그램에서 이 스크립트를 열어 주세요.');
+  var email = String(Session.getEffectiveUser().getEmail() || '').toLowerCase().trim();
+  if (!email) throw new Error('설치 계정 이메일을 확인하지 못했습니다.');
+  return locked_(function() {
+    var props = properties_();
+    var savedId = props.getProperty('SPREADSHEET_ID');
+    if (savedId && savedId !== book.getId()) {
+      throw new Error('이미 다른 스프레드시트가 연결되어 있습니다. 스크립트 속성을 확인하세요.');
+    }
+    props.setProperty('SPREADSHEET_ID',book.getId());
+    if (!props.getProperty('ADMIN_EMAILS')) props.setProperty('ADMIN_EMAILS',email);
+    if (props.getProperty('TEACHER_EMAILS') === null) props.setProperty('TEACHER_EMAILS','');
+    if (!props.getProperty('REVISION')) props.setProperty('REVISION','0');
+    ensureSheet_(book,BOOKING_SHEET_,BOOKING_HEADERS_);
+    ensureSheet_(book,RULE_SHEET_,RULE_HEADERS_);
+
+    // 새 특별실 시트에만 기본 공간을 추가합니다.
+    // 기존 예약이 사용하는 공간 ID를 유지하므로 이름 변경 후에도 예약은 보존됩니다.
+    var initializeRooms = !book.getSheetByName(ROOM_SHEET_) ||
+      book.getSheetByName(ROOM_SHEET_).getLastRow() === 0;
+    ensureSheet_(book,ROOM_SHEET_,ROOM_HEADERS_);
+    if (initializeRooms) {
+      var sheet = sheet_(book,ROOM_SHEET_,ROOM_HEADERS_);
+      [
+        ['computer','컴퓨터실','본관 3층','30','학생용 PC 30대 · 전자칠판'],
+        ['science','과학실','본관 2층','28','실험대 7개 · 실물화상기'],
+        ['music','음악실','별관 2층','32','디지털 피아노 · 음향 장비'],
+        ['library','도서실','본관 1층','24','모둠 테이블 · 수업용 화면']
+      ].forEach(function(row) { appendTextRow_(sheet,row); });
+    }
+    book.setSpreadsheetTimeZone('Asia/Seoul');
+    SpreadsheetApp.flush();
+    changed_();
+    console.log('설치 및 업데이트 완료. 기존 예약은 유지되며 특별실 시트가 준비되었습니다.');
+  });
+}
+
+function ensureSheet_(book,name,headers) {
+  var sheet = book.getSheetByName(name);
+  if (!sheet) sheet = book.insertSheet(name);
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1,1,1,headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+    sheet.getRange(1,1,1,headers.length).setFontWeight('bold').setBackground('#edf5f0');
+    sheet.autoResizeColumns(1,headers.length);
+  } else verifyHeaders_(sheet,headers);
+}
+
+function verifyHeaders_(sheet,headers) {
+  var actual = sheet.getRange(1,1,1,headers.length).getDisplayValues()[0];
+  if (actual.join('|') !== headers.join('|')) {
+    throw new Error('시트 머리글이 변경되었습니다: '+sheet.getName());
+  }
+}
+function properties_() { return PropertiesService.getScriptProperties(); }
+function emailList_(value) {
+  return String(value || '').toLowerCase().split(/[,;\s]+/)
+    .map(function(s) { return s.trim(); }).filter(Boolean);
+}
+function currentUser_() {
+  var email = String(Session.getActiveUser().getEmail() || '').toLowerCase().trim();
+  if (!email) {
+    throw new Error('로그인 이메일을 확인하지 못했습니다. 학교 Workspace 계정과 배포 접근 설정을 확인하세요. 익명 예약은 허용하지 않습니다.');
+  }
+  var props = properties_();
+  var admin = emailList_(props.getProperty('ADMIN_EMAILS')).indexOf(email) >= 0;
+  if (!admin && emailList_(props.getProperty('TEACHER_EMAILS')).indexOf(email) < 0) {
+    throw new Error('등록되지 않은 교사 계정입니다. 담당자에게 학교 이메일 등록을 요청하세요.');
+  }
+  return {email:email,isAdmin:admin};
+}
+function admin_() {
+  var user = currentUser_();
+  if (!user.isAdmin) throw new Error('관리자만 사용할 수 있는 기능입니다.');
+  return user;
+}
+function book_() {
+  var id = properties_().getProperty('SPREADSHEET_ID');
+  if (!id) throw new Error('먼저 setupBookingSystem을 실행해 주세요.');
+  return SpreadsheetApp.openById(id);
+}
+function sheet_(book,name,headers) {
+  var sheet = book.getSheetByName(name);
+  if (!sheet) throw new Error('필요한 시트가 없습니다: '+name+'. 담당자가 setupBookingSystem을 다시 실행해 주세요.');
+  verifyHeaders_(sheet,headers);
+  return sheet;
+}
+function rows_(sheet,width) {
+  var count = sheet.getLastRow()-1;
+  return count > 0 ? sheet.getRange(2,1,count,width).getDisplayValues() : [];
+}
+function locked_(callback) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(25000)) throw new Error('요청이 몰리고 있습니다. 잠시 후 다시 시도하세요.');
+  try { return callback(); } finally { lock.releaseLock(); }
+}
+function readRooms_(book) {
+  return rows_(sheet_(book,ROOM_SHEET_,ROOM_HEADERS_),ROOM_HEADERS_.length)
+    .filter(function(r) { return r[0]; }).map(function(r) {
+      return {id:r[0],name:untext_(r[1]),location:untext_(r[2]),
+        capacity:Number(r[3]),description:untext_(r[4])};
+    });
+}
+function readData_(book) {
+  var bookingRows = rows_(sheet_(book,BOOKING_SHEET_,BOOKING_HEADERS_),BOOKING_HEADERS_.length);
+  var ruleRows = rows_(sheet_(book,RULE_SHEET_,RULE_HEADERS_),RULE_HEADERS_.length);
+  return {
+    rooms:readRooms_(book),
+    bookings:bookingRows.filter(function(r) { return r[0]; }).map(function(r) {
+      return {
+        id:r[0],roomId:r[1],date:r[2],period:Number(r[3]),purpose:untext_(r[4]),
+        teacher:untext_(r[5]),className:untext_(r[6]),teacherEmail:r[7],createdAt:r[8]
+      };
+    }),
+    rules:ruleRows.filter(function(r) { return r[0]; }).map(function(r) {
+      return {
+        id:r[0],roomId:r[1],
+        days:r[2].split(',').filter(function(v) { return v !== ''; }).map(Number),
+        startPeriod:Number(r[3]),endPeriod:Number(r[4]),startDate:r[5],endDate:r[6],
+        purpose:untext_(r[7]),teacher:untext_(r[8]),teacherEmail:r[9],createdAt:r[10]
+      };
+    }),
+    revision:Number(properties_().getProperty('REVISION') || 0),
+    updatedAt:properties_().getProperty('UPDATED_AT') || null
+  };
+}
+function response_(book,user) { return {user:user,data:readData_(book)}; }
+function changed_() {
+  var props = properties_();
+  props.setProperty('REVISION',String(Number(props.getProperty('REVISION') || 0)+1));
+  props.setProperty('UPDATED_AT',new Date().toISOString());
+}
+function getInitialState() {
+  var user = currentUser_();
+  return locked_(function() { return response_(book_(),user); });
+}
+function textValue_(value,label,max,optional) {
+  if (typeof value !== 'string') {
+    if (optional && (value === undefined || value === null)) return '';
+    throw new Error(label+'을(를) 확인하세요.');
+  }
+  var result = value.trim();
+  if ((!optional && !result) || result.length > max ||
+      /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(result)) {
+    throw new Error(label+' 입력 길이 또는 내용을 확인하세요.');
+  }
+  return result;
+}
+function text_(value) {
+  var result = String(value == null ? '' : value);
+  return /^[=+\-@']/.test(result) ? '\u200B'+result : result;
+}
+function untext_(value) { return String(value || '').replace(/^\u200B/,''); }
+function appendTextRow_(sheet,row) {
+  var target = sheet.getRange(sheet.getLastRow()+1,1,1,row.length);
+  target.setNumberFormat('@');
+  target.setValues([row.map(text_)]);
+}
+function requireRoom_(rooms,id) {
+  if (!rooms.some(function(r) { return r.id === id; })) {
+    throw new Error('존재하지 않거나 삭제된 특별실입니다. 화면을 갱신해 주세요.');
+  }
+}
+function roomInput_(input) {
+  if (!input || typeof input !== 'object') throw new Error('특별실 정보를 확인하세요.');
+  var capacity = input.capacity;
+  if (typeof capacity !== 'number' || !Number.isInteger(capacity) || capacity < 1 || capacity > 1000) {
+    throw new Error('정원은 1~1,000 사이의 정수로 입력하세요.');
+  }
+  return {
+    name:textValue_(input.name,'특별실 이름',40,false),
+    location:textValue_(input.location,'위치',60,true),
+    capacity:capacity,
+    description:textValue_(input.description,'시설 안내',160,true)
+  };
+}
+function uniqueRoomName_(rooms,name,excludeId) {
+  var normalized = name.normalize('NFKC').toLowerCase();
+  if (rooms.some(function(r) {
+    return r.id !== excludeId && r.name.normalize('NFKC').toLowerCase() === normalized;
+  })) throw new Error('같은 이름의 특별실이 있습니다. 다른 이름을 입력하세요.');
+}
+function createRoom(input) {
+  var user = admin_();
+  var room = roomInput_(input);
+  return locked_(function() {
+    var book = book_();
+    uniqueRoomName_(readRooms_(book),room.name,null);
+    appendTextRow_(sheet_(book,ROOM_SHEET_,ROOM_HEADERS_),[
+      Utilities.getUuid(),room.name,room.location,String(room.capacity),room.description
+    ]);
+    SpreadsheetApp.flush();
+    changed_();
+    return response_(book,user);
+  });
+}
+function updateRoom(input) {
+  var user = admin_();
+  var room = roomInput_(input);
+  var id = textValue_(input.id,'특별실번호',100,false);
+  return locked_(function() {
+    var book = book_();
+    var rooms = readRooms_(book);
+    requireRoom_(rooms,id);
+    uniqueRoomName_(rooms,room.name,id);
+    var sheet = sheet_(book,ROOM_SHEET_,ROOM_HEADERS_);
+    var values = rows_(sheet,ROOM_HEADERS_.length);
+    var index = values.findIndex(function(r) { return r[0] === id; });
+    var target = sheet.getRange(index+2,1,1,ROOM_HEADERS_.length);
+    target.setNumberFormat('@');
+    target.setValues([[id,room.name,room.location,String(room.capacity),room.description].map(text_)]);
+    SpreadsheetApp.flush();
+    changed_();
+    return response_(book,user);
+  });
+}
+function deleteRoom(id) {
+  var user = admin_();
+  id = textValue_(id,'특별실번호',100,false);
+  return locked_(function() {
+    var book = book_();
+    var data = readData_(book);
+    requireRoom_(data.rooms,id);
+    if (data.rooms.length <= 1) throw new Error('최소 한 개의 특별실은 남겨 두어야 합니다.');
+    var bookings = data.bookings.filter(function(b) { return b.roomId === id; }).length;
+    var rules = data.rules.filter(function(r) { return r.roomId === id; }).length;
+    if (bookings || rules) {
+      throw new Error('일반 예약 '+bookings+'건과 고정 시간표 '+rules+'건이 남아 있어 삭제할 수 없습니다. 과거 일정을 포함한 모든 연결 일정을 먼저 정리해 주세요.');
+    }
+    var sheet = sheet_(book,ROOM_SHEET_,ROOM_HEADERS_);
+    var values = rows_(sheet,ROOM_HEADERS_.length);
+    var index = values.findIndex(function(r) { return r[0] === id; });
+    sheet.deleteRow(index+2);
+    SpreadsheetApp.flush();
+    changed_();
+    return response_(book,user);
+  });
+}
+function period_(value) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 8) {
+    throw new Error('교시는 1~8교시만 선택할 수 있습니다.');
+  }
+  return value;
+}
+function date_(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('날짜 형식을 확인하세요.');
+  var d = new Date(value+'T12:00:00Z');
+  if (isNaN(d.getTime()) || d.toISOString().slice(0,10) !== value ||
+      value < '2000-01-01' || value > '2100-12-31') throw new Error('유효한 날짜를 선택하세요.');
+  return value;
+}
+function weekday_(date) { return (new Date(date+'T12:00:00Z').getUTCDay()+6)%7; }
+function occupied_(data,roomId,date,period) {
+  return data.bookings.some(function(b) {
+    return b.roomId === roomId && b.date === date && b.period === period;
+  }) || data.rules.some(function(r) {
+    return r.roomId === roomId && date >= r.startDate && date <= r.endDate &&
+      r.days.indexOf(weekday_(date)) >= 0 && period >= r.startPeriod && period <= r.endPeriod;
+  });
+}
+function createBooking(input) {
+  var user = currentUser_();
+  if (!input || typeof input !== 'object') throw new Error('예약 내용을 확인하세요.');
+  var booking = {
+    roomId:textValue_(input.roomId,'특별실번호',100,false),
+    date:date_(input.date),period:period_(input.period),
+    purpose:textValue_(input.purpose,'사용 목적',60,false),
+    teacher:textValue_(input.teacher,'예약자 이름',30,false),
+    className:textValue_(input.className,'학급',40,true)
+  };
+  if (weekday_(booking.date) > 4) throw new Error('평일만 예약할 수 있습니다.');
+  return locked_(function() {
+    var book = book_();
+    var data = readData_(book);
+    requireRoom_(data.rooms,booking.roomId);
+    if (occupied_(data,booking.roomId,booking.date,booking.period)) {
+      throw new Error('이미 예약되었거나 고정 수업이 있는 시간입니다. 갱신 후 다른 시간을 선택하세요.');
+    }
+    appendTextRow_(sheet_(book,BOOKING_SHEET_,BOOKING_HEADERS_),[
+      Utilities.getUuid(),booking.roomId,booking.date,String(booking.period),
+      booking.purpose,booking.teacher,booking.className,user.email,new Date().toISOString()
+    ]);
+    SpreadsheetApp.flush();
+    changed_();
+    return response_(book,user);
+  });
+}
+function cancelBooking(id) {
+  var user = currentUser_();
+  id = textValue_(id,'예약번호',100,false);
+  return locked_(function() {
+    var book = book_();
+    var sheet = sheet_(book,BOOKING_SHEET_,BOOKING_HEADERS_);
+    var values = rows_(sheet,BOOKING_HEADERS_.length);
+    var index = values.findIndex(function(r) { return r[0] === id; });
+    if (index < 0) throw new Error('이미 취소되었거나 존재하지 않는 예약입니다.');
+    if (values[index][7].toLowerCase() !== user.email) throw new Error('본인의 예약만 취소할 수 있습니다.');
+    sheet.deleteRow(index+2);
+    SpreadsheetApp.flush();
+    changed_();
+    return response_(book,user);
+  });
+}
+function createRule(input) {
+  var user = admin_();
+  if (!input || typeof input !== 'object') throw new Error('시간표 내용을 확인하세요.');
+  var rule = {
+    roomId:textValue_(input.roomId,'특별실번호',100,false),
+    startDate:date_(input.startDate),endDate:date_(input.endDate),
+    startPeriod:period_(input.startPeriod),endPeriod:period_(input.endPeriod),
+    purpose:textValue_(input.purpose,'수업명',60,false),
+    teacher:textValue_(input.teacher,'담당 교사',30,false)
+  };
+  if (!Array.isArray(input.days) || !input.days.length || input.days.length > 5 ||
+      input.days.some(function(d) { return typeof d !== 'number' || !Number.isInteger(d) || d < 0 || d > 4; })) {
+    throw new Error('반복 요일을 확인하세요.');
+  }
+  rule.days = input.days.filter(function(d,i,arr) { return arr.indexOf(d) === i; }).sort();
+  var start = new Date(rule.startDate+'T12:00:00Z');
+  var end = new Date(rule.endDate+'T12:00:00Z');
+  if (end < start || (end-start)/86400000 > 366 || rule.endPeriod < rule.startPeriod) {
+    throw new Error('적용 기간과 교시를 확인하세요. 적용 기간은 최대 1년입니다.');
+  }
+  return locked_(function() {
+    var book = book_();
+    var data = readData_(book);
+    requireRoom_(data.rooms,rule.roomId);
+    var count = 0;
+    for (var day = new Date(start); day <= end; day.setUTCDate(day.getUTCDate()+1)) {
+      var date = day.toISOString().slice(0,10);
+      if (rule.days.indexOf(weekday_(date)) < 0) continue;
+      for (var p = rule.startPeriod; p <= rule.endPeriod; p++) {
+        count++;
+        if (occupied_(data,rule.roomId,date,p)) {
+          throw new Error('기존 일정과 겹칩니다: '+date+' '+p+'교시. 등록된 내용은 없습니다.');
+        }
+      }
+    }
+    if (!count) throw new Error('적용 기간에 선택한 요일이 없습니다.');
+    appendTextRow_(sheet_(book,RULE_SHEET_,RULE_HEADERS_),[
+      Utilities.getUuid(),rule.roomId,rule.days.join(','),String(rule.startPeriod),String(rule.endPeriod),
+      rule.startDate,rule.endDate,rule.purpose,rule.teacher,user.email,new Date().toISOString()
+    ]);
+    SpreadsheetApp.flush();
+    changed_();
+    return response_(book,user);
+  });
+}
+function deleteRule(id) {
+  var user = admin_();
+  id = textValue_(id,'시간표번호',100,false);
+  return locked_(function() {
+    var book = book_();
+    var sheet = sheet_(book,RULE_SHEET_,RULE_HEADERS_);
+    var values = rows_(sheet,RULE_HEADERS_.length);
+    var index = values.findIndex(function(r) { return r[0] === id; });
+    if (index < 0) throw new Error('이미 삭제되었거나 존재하지 않는 시간표입니다.');
+    sheet.deleteRow(index+2);
+    SpreadsheetApp.flush();
+    changed_();
+    return response_(book,user);
+  });
+}`;
+
+    function Modal({title,subtitle,onClose,children,wide=false,busy=false}) {
+      const panelRef=useRef(null);
+      const closeRef=useRef(onClose);
+      const busyRef=useRef(busy);
+      closeRef.current=onClose;
+      busyRef.current=busy;
+      useEffect(()=>{
+        const previousFocus=document.activeElement;
+        const previousOverflow=document.body.style.overflow;
+        document.body.style.overflow='hidden';
+        const panel=panelRef.current;
+        const focusable=()=>[...panel.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href]')]
+          .filter(el=>el.offsetParent!==null);
+        (panel.querySelector('input:not([type="checkbox"]),select')||focusable()[0]||panel).focus();
+        const onKey=event=>{
+          if(event.key==='Escape'&&!busyRef.current)closeRef.current();
+          if(event.key==='Tab'){
+            const elements=focusable();
+            const first=elements[0],last=elements[elements.length-1];
+            if(!elements.length){event.preventDefault();panel.focus();}
+            else if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
+            else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+          }
+        };
+        document.addEventListener('keydown',onKey);
+        return ()=>{
+          document.body.style.overflow=previousOverflow;
+          document.removeEventListener('keydown',onKey);
+          if(previousFocus?.isConnected)previousFocus.focus();
+          else document.getElementById('main')?.focus({preventScroll:true});
+        };
+      },[]);
+      return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[#142c25]/40 p-4"
+          onMouseDown={e=>{if(e.target===e.currentTarget&&!busy)onClose();}}>
+          <section ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="modal-title" tabIndex="-1"
+            className={`animate-enter relative my-auto max-h-[90dvh] w-full overflow-y-auto rounded-2xl bg-white shadow-xl scrollbar ${wide?'max-w-2xl':'max-w-lg'}`}>
+            <header className="flex items-start justify-between gap-4 border-b border-line p-5 sm:p-6">
+              <div>
+                <h2 id="modal-title" className="text-xl font-bold tracking-tight">{title}</h2>
+                {subtitle&&<p className="mt-1.5 text-sm leading-relaxed text-slate-500">{subtitle}</p>}
+              </div>
+              <button type="button" disabled={busy} onClick={onClose} aria-label="창 닫기"
+                className="rounded-lg p-1.5 text-slate-500 hover:bg-paper disabled:opacity-40"><X size={20} aria-hidden="true"/></button>
+            </header>
+            {children}
+          </section>
+        </div>
+      );
+    }
+
+    function RoomManagerModal({data,onCreate,onUpdate,onDelete,onClose}) {
+      const [editingId,setEditingId]=useState(null);
+      const [name,setName]=useState('');
+      const [location,setLocation]=useState('');
+      const [capacity,setCapacity]=useState('30');
+      const [description,setDescription]=useState('');
+      const [errors,setErrors]=useState({});
+      const [saving,setSaving]=useState(false);
+      const [confirmId,setConfirmId]=useState(null);
+      const [message,setMessage]=useState('');
+      const formRef=useRef(null);
+
+      function reset() {
+        setEditingId(null);setName('');setLocation('');setCapacity('30');
+        setDescription('');setErrors({});setConfirmId(null);
+      }
+      function edit(room) {
+        setEditingId(room.id);setName(room.name);setLocation(room.location||'');
+        setCapacity(String(room.capacity));setDescription(room.description||'');
+        setErrors({});setMessage('');setConfirmId(null);
+        requestAnimationFrame(()=>{
+          formRef.current?.scrollIntoView({block:'nearest',behavior:'smooth'});
+          document.getElementById('room-name')?.focus({preventScroll:true});
+        });
+      }
+      async function submit(e) {
+        e.preventDefault();
+        if(saving)return;
+        const next={};
+        if(!name.trim())next['room-name']='특별실 이름을 입력해 주세요.';
+        else if(data.rooms.some(r=>r.id!==editingId&&
+          r.name.normalize('NFKC').toLowerCase()===name.trim().normalize('NFKC').toLowerCase()))
+          next['room-name']='같은 이름의 특별실이 있습니다. 다른 이름을 입력해 주세요.';
+        const n=Number(capacity);
+        if(!capacity.trim()||!Number.isInteger(n)||n<1||n>1000)
+          next['room-capacity']='정원은 1~1,000 사이의 정수로 입력해 주세요.';
+        setErrors(next);setMessage('');
+        if(Object.keys(next).length){document.getElementById(Object.keys(next)[0])?.focus();return;}
+        setSaving(true);
+        const payload={name:name.trim(),location:location.trim(),capacity:n,description:description.trim()};
+        const error=editingId?await onUpdate({...payload,id:editingId}):await onCreate(payload);
+        setSaving(false);
+        if(error)setErrors({submit:error});
+        else{
+          const wasEditing=!!editingId;
+          reset();
+          setMessage(wasEditing?'특별실 정보를 수정했습니다. 기존 예약과 고정 시간표는 유지됩니다.':'새 특별실을 추가했습니다.');
+          requestAnimationFrame(()=>document.getElementById('room-name')?.focus());
+        }
+      }
+      async function remove(id) {
+        if(saving)return;
+        setSaving(true);setErrors({});setMessage('');
+        const error=await onDelete(id);
+        setSaving(false);
+        if(error)setErrors({submit:error});
+        else{
+          if(editingId===id)reset();
+          setConfirmId(null);
+          setMessage('특별실을 삭제했습니다.');
+        }
+      }
+
+      return (
+        <Modal wide busy={saving} title="특별실 관리"
+          subtitle="공간을 추가하거나 이름과 시설 정보를 수정할 수 있습니다."
+          onClose={onClose}>
+          <div className="space-y-6 p-5 sm:p-6">
+            <div className="flex gap-2 rounded-lg border border-[#dce7e0] bg-[#edf3ef] p-3 text-xs leading-6 text-[#476052]">
+              <Info size={16} className="mt-1 shrink-0" aria-hidden="true"/>
+              <p>이름을 바꿔도 기존 일정은 유지됩니다. 삭제는 과거 일정을 포함해 연결된 일반 예약과 고정 시간표가 모두 없는 경우에만 가능합니다. 최소 한 개의 특별실은 남겨 두어야 합니다.</p>
+            </div>
+            <form ref={formRef} onSubmit={submit} noValidate className="rounded-xl border border-line p-4">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h3 className="font-semibold">{editingId?'특별실 정보 수정':'새 특별실 추가'}</h3>
+                {editingId&&<button type="button" disabled={saving} onClick={reset}
+                  className="text-xs font-medium text-brand hover:underline">수정 취소</button>}
+              </div>
+              <fieldset disabled={saving} className="space-y-4 disabled:opacity-60">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="room-name" className="mb-1.5 block text-xs font-medium">특별실 이름 <span className="text-brand">*</span></label>
+                    <input id="room-name" name="roomName" value={name} onChange={e=>setName(e.target.value)}
+                      maxLength={40} className={inputClass} placeholder="예: 메이커실"
+                      aria-invalid={!!errors['room-name']} aria-describedby={errors['room-name']?'room-name-error':undefined}/>
+                    {errors['room-name']&&<p id="room-name-error" className="mt-1.5 text-xs text-red-700">{errors['room-name']}</p>}
+                  </div>
+                  <div>
+                    <label htmlFor="room-location" className="mb-1.5 block text-xs font-medium">위치 <span className="font-normal text-slate-500">선택</span></label>
+                    <input id="room-location" name="location" value={location} onChange={e=>setLocation(e.target.value)}
+                      maxLength={60} className={inputClass} placeholder="예: 별관 1층"/>
+                  </div>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-[130px_1fr]">
+                  <div>
+                    <label htmlFor="room-capacity" className="mb-1.5 block text-xs font-medium">정원 <span className="text-brand">*</span></label>
+                    <input id="room-capacity" name="capacity" type="number" min="1" max="1000" step="1"
+                      value={capacity} onChange={e=>setCapacity(e.target.value)} className={inputClass}
+                      aria-invalid={!!errors['room-capacity']} aria-describedby={errors['room-capacity']?'room-capacity-error':undefined}/>
+                    {errors['room-capacity']&&<p id="room-capacity-error" className="mt-1.5 text-xs text-red-700">{errors['room-capacity']}</p>}
+                  </div>
+                  <div>
+                    <label htmlFor="room-description" className="mb-1.5 block text-xs font-medium">시설 안내 <span className="font-normal text-slate-500">선택</span></label>
+                    <input id="room-description" name="description" value={description}
+                      onChange={e=>setDescription(e.target.value)} maxLength={160} className={inputClass}
+                      placeholder="예: 모둠 테이블 · 3D 프린터"/>
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button type="submit" className={primaryClass}>
+                    {saving?<Loader2 size={16} className="animate-spin" aria-hidden="true"/>:editingId?<Check size={16} aria-hidden="true"/>:<Plus size={16} aria-hidden="true"/>}
+                    {saving?'저장하는 중…':editingId?'변경 사항 저장':'특별실 추가'}
+                  </button>
+                </div>
+              </fieldset>
+            </form>
+            {errors.submit&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-xs leading-6 text-red-800">{errors.submit}</p>}
+            <div role="status" aria-live="polite">
+              {message&&<p className="flex items-start gap-2 rounded-lg bg-emerald-50 p-3 text-xs leading-6 text-brand"><CheckCircle size={16} className="mt-1 shrink-0" aria-hidden="true"/>{message}</p>}
+            </div>
+            <section aria-labelledby="room-list-title">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 id="room-list-title" className="font-semibold">등록된 특별실</h3>
+                <span className="text-xs text-slate-500">{formatNumber(data.rooms.length)}개</span>
+              </div>
+              <div className="space-y-3">
+                {!data.rooms.length&&<p className="rounded-xl border border-dashed border-line p-6 text-center text-slate-500">등록된 특별실이 없습니다. 위에서 첫 공간을 추가해 주세요.</p>}
+                {data.rooms.map(r=>{
+                  const Icon=roomIcon(r);
+                  const bookings=data.bookings.filter(b=>b.roomId===r.id).length;
+                  const rules=data.rules.filter(rule=>rule.roomId===r.id).length;
+                  const blocked=bookings>0||rules>0||data.rooms.length<=1;
+                  return (
+                    <article key={r.id} className={`rounded-xl border p-4 ${editingId===r.id?'border-brand bg-emerald-50/30':'border-line'}`}>
+                      <div className="flex items-start gap-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-paper text-brand"><Icon size={18} aria-hidden="true"/></span>
+                        <div className="min-w-0 flex-1">
+                          <h4 className="break-words font-semibold">{r.name}</h4>
+                          <p className="mt-1 break-words text-xs text-slate-500">{r.location||'위치 미등록'} · 정원 {formatNumber(r.capacity)}명</p>
+                          {r.description&&<p className="mt-1 break-words text-xs leading-5 text-slate-500">{r.description}</p>}
+                        </div>
+                        <button type="button" disabled={saving} onClick={()=>edit(r)}
+                          className="rounded-lg p-2 text-slate-500 hover:bg-paper hover:text-brand disabled:opacity-40"
+                          aria-label={`${r.name} 정보 수정`}><Edit size={16} aria-hidden="true"/></button>
+                        <button type="button" disabled={saving} onClick={()=>{setConfirmId(confirmId===r.id?null:r.id);setErrors({});}}
+                          className="rounded-lg p-2 text-slate-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-40"
+                          aria-label={`${r.name} 삭제 안내`} aria-expanded={confirmId===r.id}><Trash2 size={16} aria-hidden="true"/></button>
+                      </div>
+                      <p className="mt-3 text-[11px] text-slate-500">전체 일반 예약 {formatNumber(bookings)}건 · 고정 시간표 {formatNumber(rules)}건</p>
+                      {confirmId===r.id&&(
+                        <div className={`mt-3 rounded-lg p-3 text-xs leading-6 ${blocked?'bg-paper text-slate-600':'bg-red-50 text-red-800'}`}>
+                          {blocked?(
+                            <>
+                              <p className="font-semibold">현재 이 특별실은 삭제할 수 없습니다.</p>
+                              <p>{bookings||rules?'과거 일정을 포함한 연결 일정이 남아 있습니다. 일반 예약은 예약자 본인이 취소하고, 고정 시간표는 관리자가 해제한 뒤 다시 시도해 주세요.':'마지막 특별실입니다. 다른 특별실을 먼저 추가해 주세요.'}</p>
+                              <button type="button" disabled={saving} onClick={()=>setConfirmId(null)} className="mt-2 font-semibold hover:underline">확인</button>
+                            </>
+                          ):(
+                            <>
+                              <p className="font-semibold">‘{r.name}’을 삭제할까요?</p>
+                              <p>삭제 후에는 캘린더의 특별실 목록에서 사라집니다.</p>
+                              <div className="mt-3 flex gap-2">
+                                <button type="button" disabled={saving} onClick={()=>remove(r.id)}
+                                  className="inline-flex items-center gap-1.5 rounded-lg bg-red-700 px-3 py-2 font-semibold text-white hover:bg-red-800 disabled:opacity-50">
+                                  {saving&&<Loader2 size={13} className="animate-spin" aria-hidden="true"/>}
+                                  {saving?'삭제하는 중…':'특별실 삭제'}
+                                </button>
+                                <button type="button" disabled={saving} onClick={()=>setConfirmId(null)} className="rounded-lg px-3 py-2 hover:bg-red-100">유지하기</button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+            <div className="flex justify-end border-t border-line pt-4">
+              <button type="button" disabled={saving} onClick={onClose} className={secondaryClass}>관리 닫기</button>
+            </div>
+          </div>
+        </Modal>
+      );
+    }
+
+    function BookingModal({slot,room,data,user,connected,onSave,onDelete,onClose}) {
+      const status=getSlot(data,room.id,slot.date,slot.period);
+      const [teacher,setTeacher]=useState('');
+      const [purpose,setPurpose]=useState('');
+      const [className,setClassName]=useState('');
+      const [errors,setErrors]=useState({});
+      const [saving,setSaving]=useState(false);
+      const [confirmDelete,setConfirmDelete]=useState(false);
+      const mounted=useRef(true);
+      useEffect(()=>()=>{mounted.current=false;},[]);
+      const canCancel=status.type==='booked'&&(!connected||status.entry.teacherEmail===user?.email);
+      async function submit(e) {
+        e.preventDefault();
+        if(saving)return;
+        const next={};
+        if(!teacher.trim())next.teacher='예약하시는 선생님의 이름을 입력해 주세요.';
+        if(!purpose.trim())next.purpose='수업명이나 사용 목적을 입력해 주세요.';
+        setErrors(next);
+        if(Object.keys(next).length){document.getElementById(Object.keys(next)[0])?.focus();return;}
+        setSaving(true);
+        const result=await onSave({id:makeId(),roomId:room.id,date:slot.date,period:slot.period,
+          teacher:teacher.trim(),purpose:purpose.trim(),className:className.trim()});
+        if(mounted.current){setSaving(false);if(result)setErrors({submit:result});}
+      }
+      async function remove() {
+        if(saving)return;
+        setSaving(true);setErrors({});
+        const result=await onDelete(status.entry.id);
+        if(mounted.current){setSaving(false);if(result)setErrors({submit:result});}
+      }
+      return (
+        <Modal busy={saving} title={status.type==='free'?'특별실 예약하기':'예약 상세 정보'}
+          subtitle={`${room.name} · ${fullDate(slot.date)} · ${slot.period}교시`} onClose={onClose}>
+          <div className="p-5 sm:p-6">
+            <div className={`mb-5 flex items-center gap-3 rounded-xl p-4 ${status.type==='free'?'bg-emerald-50 text-brand':'bg-paper text-slate-600'}`}>
+              {status.type==='free'?<CheckCircle size={22} aria-hidden="true"/>:<Lock size={22} aria-hidden="true"/>}
+              <div>
+                <p className="font-semibold">{status.type==='free'?'예약할 수 있는 시간입니다':status.type==='fixed'?'고정 수업으로 예약할 수 없습니다':'이미 예약된 시간입니다'}</p>
+                <p className="mt-1 text-xs">{periods[slot.period-1].join(' ~ ')} · {room.location||'위치 미등록'}</p>
+              </div>
+            </div>
+            {status.type==='free'?(
+              <form onSubmit={submit} noValidate>
+                <fieldset disabled={saving} className="space-y-4">
+                  <div>
+                    <label htmlFor="teacher" className="mb-1.5 block font-medium">예약자 이름 <span className="text-brand">*</span></label>
+                    <input id="teacher" name="teacher" autoComplete="name" value={teacher} onChange={e=>setTeacher(e.target.value)} maxLength={30}
+                      className={inputClass} placeholder="예: 김민준" aria-invalid={!!errors.teacher} aria-describedby={errors.teacher?'teacher-error':undefined}/>
+                    {errors.teacher&&<p id="teacher-error" className="mt-1.5 text-xs text-red-700">{errors.teacher}</p>}
+                  </div>
+                  <div>
+                    <label htmlFor="purpose" className="mb-1.5 block font-medium">수업명 / 사용 목적 <span className="text-brand">*</span></label>
+                    <input id="purpose" name="purpose" value={purpose} onChange={e=>setPurpose(e.target.value)} maxLength={60}
+                      className={inputClass} placeholder="예: 디지털 시민교육" aria-invalid={!!errors.purpose} aria-describedby={errors.purpose?'purpose-error':undefined}/>
+                    {errors.purpose&&<p id="purpose-error" className="mt-1.5 text-xs text-red-700">{errors.purpose}</p>}
+                  </div>
+                  <div>
+                    <label htmlFor="className" className="mb-1.5 block font-medium">학급 / 대상 <span className="ml-1 font-normal text-slate-500">선택</span></label>
+                    <input id="className" name="className" value={className} onChange={e=>setClassName(e.target.value)} maxLength={40}
+                      className={inputClass} placeholder="예: 5학년 2반"/>
+                  </div>
+                </fieldset>
+                {connected?(
+                  <div className="mt-5 rounded-lg bg-paper p-3 text-xs leading-6 text-slate-600">
+                    <p className="break-all">로그인 계정: {user?.email}</p>
+                    <p>취소 권한은 입력한 이름이 아닌 로그인 계정으로 확인합니다.</p>
+                  </div>
+                ):<p className="mt-5 text-xs leading-relaxed text-slate-500">시연 모드입니다. 예약은 이 브라우저에만 저장됩니다.</p>}
+                {errors.submit&&<p role="alert" className="mt-4 text-sm leading-6 text-red-700">{errors.submit}</p>}
+                <div className="mt-5 flex justify-end gap-2 border-t border-line pt-5">
+                  <button type="button" disabled={saving} onClick={onClose} className={secondaryClass}>닫기</button>
+                  <button type="submit" disabled={saving} className={primaryClass}>
+                    {saving?<Loader2 size={16} className="animate-spin" aria-hidden="true"/>:<Check size={16} aria-hidden="true"/>}
+                    {saving?'저장하는 중…':'예약 확정'}
+                  </button>
+                </div>
+              </form>
+            ):(
+              <>
+                <dl className="space-y-4">
+                  {[
+                    ['수업 / 사용 목적',status.entry.purpose],
+                    ['예약자',`${status.entry.teacher} 선생님`],
+                    ['학급 / 대상',status.entry.className||'별도 지정 없음'],
+                    ...(status.type==='fixed'?[
+                      ['반복 요일',status.entry.days.map(d=>`${dayNames[d]}요일`).join(', ')],
+                      ['적용 기간',`${status.entry.startDate.replaceAll('-','. ')} ~ ${status.entry.endDate.replaceAll('-','. ')}`]
+                    ]:[])
+                  ].map(([label,value])=>(
+                    <div key={label} className="grid grid-cols-[110px_1fr] gap-3">
+                      <dt className="text-slate-500">{label}</dt><dd className="break-words font-medium">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                {status.type==='fixed'?(
+                  <p className="mt-6 rounded-lg bg-paper p-3 text-xs leading-relaxed text-slate-600">고정 수업은 관리자만 ‘고정 시간표 관리’에서 변경할 수 있습니다.</p>
+                ):canCancel?(
+                  <div className="mt-6 border-t border-line pt-5">
+                    {confirmDelete?(
+                      <div role="alert" className="rounded-lg bg-red-50 p-4">
+                        <p className="font-medium text-red-800">이 예약을 취소할까요?</p>
+                        <p className="mt-1 text-xs text-red-700">취소하면 다시 예약할 수 있습니다.</p>
+                        <div className="mt-3 flex gap-2">
+                          <button type="button" disabled={saving} onClick={remove}
+                            className="rounded-lg bg-red-700 px-3 py-2 text-xs font-semibold text-white hover:bg-red-800 disabled:opacity-50">{saving?'취소하는 중…':'예약 취소 확정'}</button>
+                          <button type="button" disabled={saving} onClick={()=>setConfirmDelete(false)}
+                            className="rounded-lg px-3 py-2 text-xs hover:bg-red-100">유지하기</button>
+                        </div>
+                      </div>
+                    ):<button type="button" onClick={()=>setConfirmDelete(true)} className="text-sm font-medium text-red-700 hover:underline">예약 취소하기</button>}
+                  </div>
+                ):<p className="mt-6 rounded-lg bg-paper p-3 text-xs text-slate-600">다른 선생님의 예약입니다. 예약자 본인만 취소할 수 있습니다.</p>}
+                {errors.submit&&<p role="alert" className="mt-4 text-sm leading-6 text-red-700">{errors.submit}</p>}
+                {!connected&&<p className="mt-4 text-xs leading-relaxed text-slate-500">시연 모드에서는 모든 예약을 취소할 수 있습니다.</p>}
+              </>
+            )}
+          </div>
+        </Modal>
+      );
+    }
+
+    function RecurringModal({roomId,data,onSave,onDelete,onClose}) {
+      const [tab,setTab]=useState('add');
+      const [selectedRoom,setSelectedRoom]=useState(roomId);
+      const [days,setDays]=useState([0]);
+      const [startPeriod,setStartPeriod]=useState(1);
+      const [endPeriod,setEndPeriod]=useState(1);
+      const [startDate,setStartDate]=useState(iso(new Date()));
+      const [endDate,setEndDate]=useState(iso(addDays(new Date(),90)));
+      const [purpose,setPurpose]=useState('');
+      const [teacher,setTeacher]=useState('');
+      const [errors,setErrors]=useState({});
+      const [saving,setSaving]=useState(false);
+      const [confirmId,setConfirmId]=useState(null);
+      const mounted=useRef(true);
+      useEffect(()=>()=>{mounted.current=false;},[]);
+      useEffect(()=>{
+        if(!data.rooms.some(r=>r.id===selectedRoom))setSelectedRoom(data.rooms[0]?.id||'');
+      },[data.rooms,selectedRoom]);
+      async function submit(e) {
+        e.preventDefault();
+        if(saving)return;
+        const next={};
+        if(!selectedRoom)next['rule-room']='먼저 특별실을 등록해 주세요.';
+        if(!purpose.trim())next['rule-purpose']='고정 수업명을 입력해 주세요.';
+        if(!teacher.trim())next['rule-teacher']='담당 선생님의 이름을 입력해 주세요.';
+        if(!days.length)next.days='반복할 요일을 하나 이상 선택해 주세요.';
+        if(!startDate||!endDate||endDate<startDate)next['rule-start']='종료일이 시작일 이후인 적용 기간을 선택해 주세요.';
+        else if((parseDate(endDate)-parseDate(startDate))/86400000>366)next['rule-start']='한 번에 등록할 수 있는 기간은 최대 1년입니다.';
+        setErrors(next);
+        if(Object.keys(next).length){
+          document.getElementById(Object.keys(next)[0]==='days'?'weekday-0':Object.keys(next)[0])?.focus();return;
+        }
+        setSaving(true);
+        const result=await onSave({id:makeId(),roomId:selectedRoom,days:[...days].sort(),
+          startPeriod,endPeriod,startDate,endDate,purpose:purpose.trim(),teacher:teacher.trim()});
+        if(mounted.current){setSaving(false);if(result)setErrors({submit:result});}
+      }
+      async function remove(id) {
+        if(saving)return;
+        setSaving(true);setErrors({});
+        const result=await onDelete(id);
+        if(mounted.current){setSaving(false);if(result)setErrors({submit:result});else setConfirmId(null);}
+      }
+      return (
+        <Modal wide busy={saving} title="고정 시간표 관리"
+          subtitle="정규 수업을 한 번 등록하면 해당 기간의 시간이 매주 예약 불가로 표시됩니다." onClose={onClose}>
+          <div className="px-5 pt-4 sm:px-6">
+            <div className="flex gap-5 border-b border-line" role="tablist" aria-label="시간표 관리 방식">
+              {[['add','시간표 등록'],['manage',`등록된 시간표 ${formatNumber(data.rules.length)}`]].map(([value,label])=>(
+                <button type="button" key={value} role="tab" aria-selected={tab===value} disabled={saving}
+                  onClick={()=>{setTab(value);setErrors({});}}
+                  className={`border-b-2 px-1 pb-3 font-semibold ${tab===value?'border-brand text-brand':'border-transparent text-slate-500 hover:text-ink'}`}>{label}</button>
+              ))}
+            </div>
+          </div>
+          {tab==='add'?(
+            <form onSubmit={submit} noValidate className="space-y-4 p-5 sm:p-6">
+              <fieldset disabled={saving} className="space-y-4">
+                <div>
+                  <label htmlFor="rule-room" className="mb-1.5 block font-medium">특별실</label>
+                  <select id="rule-room" name="roomId" className={inputClass} value={selectedRoom} onChange={e=>setSelectedRoom(e.target.value)}>
+                    {!data.rooms.length&&<option value="">특별실을 먼저 등록해 주세요</option>}
+                    {data.rooms.map(r=><option key={r.id} value={r.id}>{r.name}{r.location?` · ${r.location}`:''}</option>)}
+                  </select>
+                  {errors['rule-room']&&<p className="mt-1.5 text-xs text-red-700">{errors['rule-room']}</p>}
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="rule-purpose" className="mb-1.5 block font-medium">고정 수업명 <span className="text-brand">*</span></label>
+                    <input id="rule-purpose" name="purpose" className={inputClass} value={purpose} onChange={e=>setPurpose(e.target.value)}
+                      placeholder="예: 5학년 정보 수업" maxLength={60} aria-invalid={!!errors['rule-purpose']} aria-describedby={errors['rule-purpose']?'rule-purpose-error':undefined}/>
+                    {errors['rule-purpose']&&<p id="rule-purpose-error" className="mt-1.5 text-xs text-red-700">{errors['rule-purpose']}</p>}
+                  </div>
+                  <div>
+                    <label htmlFor="rule-teacher" className="mb-1.5 block font-medium">담당 선생님 <span className="text-brand">*</span></label>
+                    <input id="rule-teacher" name="teacher" autoComplete="name" className={inputClass} value={teacher} onChange={e=>setTeacher(e.target.value)}
+                      placeholder="예: 김민준" maxLength={30} aria-invalid={!!errors['rule-teacher']} aria-describedby={errors['rule-teacher']?'rule-teacher-error':undefined}/>
+                    {errors['rule-teacher']&&<p id="rule-teacher-error" className="mt-1.5 text-xs text-red-700">{errors['rule-teacher']}</p>}
+                  </div>
+                </div>
+                <fieldset>
+                  <legend className="mb-2 font-medium">반복 요일 <span className="text-brand">*</span></legend>
+                  <div className="grid grid-cols-5 gap-2">
+                    {dayNames.map((day,i)=>(
+                      <label key={day} className={`flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border py-2.5 ${days.includes(i)?'border-brand bg-emerald-50 text-brand':'border-line hover:bg-paper'}`}>
+                        <input id={`weekday-${i}`} name="days" type="checkbox" checked={days.includes(i)}
+                          onChange={()=>setDays(prev=>prev.includes(i)?prev.filter(d=>d!==i):[...prev,i])}
+                          className="h-3.5 w-3.5 accent-[#147366]" aria-describedby={errors.days?'days-error':undefined}/>{day}
+                      </label>
+                    ))}
+                  </div>
+                  {errors.days&&<p id="days-error" className="mt-1.5 text-xs text-red-700">{errors.days}</p>}
+                </fieldset>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label htmlFor="rule-period-start" className="mb-1.5 block font-medium">시작 교시</label>
+                    <select id="rule-period-start" name="startPeriod" className={inputClass} value={startPeriod}
+                      onChange={e=>{const n=Number(e.target.value);setStartPeriod(n);if(endPeriod<n)setEndPeriod(n);}}>
+                      {periods.map((_,i)=><option key={i} value={i+1}>{i+1}교시</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="rule-period-end" className="mb-1.5 block font-medium">종료 교시</label>
+                    <select id="rule-period-end" name="endPeriod" className={inputClass} value={endPeriod} onChange={e=>setEndPeriod(Number(e.target.value))}>
+                      {periods.map((_,i)=>i+1>=startPeriod&&<option key={i} value={i+1}>{i+1}교시</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label htmlFor="rule-start" className="mb-1.5 block font-medium">적용 시작일</label>
+                    <input id="rule-start" name="startDate" type="date" className={inputClass} value={startDate} onChange={e=>setStartDate(e.target.value)}
+                      aria-invalid={!!errors['rule-start']} aria-describedby={errors['rule-start']?'rule-date-error':undefined}/>
+                  </div>
+                  <div>
+                    <label htmlFor="rule-end" className="mb-1.5 block font-medium">적용 종료일</label>
+                    <input id="rule-end" name="endDate" type="date" className={inputClass} value={endDate} min={startDate} onChange={e=>setEndDate(e.target.value)}/>
+                  </div>
+                </div>
+                {errors['rule-start']&&<p id="rule-date-error" className="text-xs text-red-700">{errors['rule-start']}</p>}
+              </fieldset>
+              <div className="flex gap-2 rounded-lg bg-paper p-3 text-xs leading-relaxed text-slate-600">
+                <Info size={16} className="mt-0.5 shrink-0" aria-hidden="true"/>
+                <p>선택한 기간의 모든 해당 요일에 적용됩니다. 기존 일정과 하나라도 겹치면 등록하지 않습니다. 공휴일도 포함되므로 적용 기간을 확인해 주세요.</p>
+              </div>
+              {errors.submit&&<p role="alert" className="text-sm leading-relaxed text-red-700">{errors.submit}</p>}
+              <div className="flex justify-end gap-2 border-t border-line pt-4">
+                <button type="button" disabled={saving} className={secondaryClass} onClick={onClose}>닫기</button>
+                <button type="submit" disabled={saving||!selectedRoom} className={primaryClass}>
+                  {saving?<Loader2 size={16} className="animate-spin" aria-hidden="true"/>:<RefreshCw size={16} aria-hidden="true"/>}
+                  {saving?'등록하는 중…':'고정 시간표 일괄 등록'}
+                </button>
+              </div>
+            </form>
+          ):(
+            <div className="space-y-3 p-5 sm:p-6">
+              <p className="mb-4 text-xs leading-relaxed text-slate-500">고정 시간표를 삭제하면 해당 반복 일정 전체가 해제됩니다. 일반 예약은 유지됩니다.</p>
+              {errors.submit&&<p role="alert" className="text-sm text-red-700">{errors.submit}</p>}
+              {!data.rules.length&&(
+                <div className="rounded-xl border border-dashed border-line p-8 text-center">
+                  <Calendar className="mx-auto mb-3 text-slate-400" size={28} aria-hidden="true"/>
+                  <p className="font-medium">등록된 고정 시간표가 없습니다</p>
+                  <button type="button" onClick={()=>setTab('add')} className="mt-3 text-brand hover:underline">새 시간표 등록하기</button>
+                </div>
+              )}
+              {data.rules.map(r=>(
+                <article key={r.id} className="rounded-xl border border-line p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="break-words font-semibold">{r.purpose}</p>
+                      <p className="mt-1 text-xs text-slate-500">{data.rooms.find(room=>room.id===r.roomId)?.name||'특별실 정보 없음'} · {r.teacher} 선생님</p>
+                    </div>
+                    <button type="button" disabled={saving} onClick={()=>setConfirmId(confirmId===r.id?null:r.id)}
+                      className="shrink-0 rounded px-2 py-1 text-xs text-red-700 hover:bg-red-50">삭제</button>
+                  </div>
+                  <p className="mt-3 text-xs font-medium">매주 {r.days.map(d=>dayNames[d]).join('·')}요일 · {r.startPeriod===r.endPeriod?`${r.startPeriod}교시`:`${r.startPeriod}~${r.endPeriod}교시`}</p>
+                  <p className="mt-1 text-xs tabular-nums text-slate-500">{r.startDate.replaceAll('-','. ')} ~ {r.endDate.replaceAll('-','. ')}</p>
+                  {confirmId===r.id&&(
+                    <div className="mt-3 rounded-lg bg-red-50 p-3">
+                      <p className="text-xs leading-relaxed text-red-800">이 고정 시간표의 모든 반복 일정을 해제할까요?</p>
+                      <div className="mt-2 flex gap-3">
+                        <button type="button" disabled={saving} onClick={()=>remove(r.id)} className="text-xs font-semibold text-red-700 hover:underline">{saving?'처리하는 중…':'전체 해제'}</button>
+                        <button type="button" disabled={saving} onClick={()=>setConfirmId(null)} className="text-xs hover:underline">유지하기</button>
+                      </div>
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+        </Modal>
+      );
+    }
+
+    function downloadFile(contents,filename,type='text/plain;charset=utf-8') {
+      const url=URL.createObjectURL(new Blob([contents],{type}));
+      const link=document.createElement('a');
+      link.href=url;link.download=filename;document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }
+    function GuideList({children}) {
+      return <ol className="list-decimal space-y-3 pl-5 leading-7 text-slate-600 marker:font-semibold marker:text-brand">{children}</ol>;
+    }
+    function GuideNote({children,warning=false}) {
+      return (
+        <div className={`flex items-start gap-2 rounded-lg border p-3 text-xs leading-6 ${warning?'border-amber-200 bg-amber-50 text-amber-950':'border-line bg-paper text-slate-600'}`}>
+          <Info size={16} className="mt-1 shrink-0" aria-hidden="true"/><div className="min-w-0">{children}</div>
+        </div>
+      );
+    }
+
+    function DeploymentModal({data,onClose}) {
+      const [step,setStep]=useState(0);
+      const [done,setDone]=useState([false,false,false,false,false]);
+      const [showCode,setShowCode]=useState(false);
+      const [copyStatus,setCopyStatus]=useState('');
+      const [showTerms,setShowTerms]=useState(false);
+      const codeRef=useRef(null);
+      const headingRef=useRef(null);
+      const titles=[
+        ['학교 계정과 사용 조건 확인','먼저 이 방식이 맞는지 확인해요'],
+        ['스프레드시트와 서버 만들기','서버 코드를 붙여 넣어요'],
+        ['예약 화면과 교사 계정 등록','HTML과 접근 권한을 설정해요'],
+        ['웹 앱으로 배포하기','별도 호스팅 없이 주소를 만들어요'],
+        ['두 계정으로 확인하기','확인 후 학교에 공유해요']
+      ];
+      function selectStep(index) {
+        setStep(index);setCopyStatus('');
+        requestAnimationFrame(()=>{
+          headingRef.current?.focus({preventScroll:true});
+          headingRef.current?.scrollIntoView({block:'nearest',behavior:'smooth'});
+        });
+      }
+      async function copyCode() {
+        try{
+          if(!navigator.clipboard?.writeText)throw new Error();
+          await navigator.clipboard.writeText(serverCode);
+          setCopyStatus('서버 코드를 복사했습니다. Code.gs에 붙여 넣으세요.');
+        }catch{
+          setShowCode(true);
+          setCopyStatus('자동 복사가 제한되어 있습니다. 아래 코드를 선택해 복사하거나 파일을 내려받으세요.');
+          setTimeout(()=>{codeRef.current?.focus();codeRef.current?.select();},0);
+        }
+      }
+      return (
+        <Modal wide title="Google Sheets로 함께 사용하기"
+          subtitle="스프레드시트 하나 + Apps Script 하나로 예약 화면과 공용 저장소를 연결합니다." onClose={onClose}>
+          <div className="space-y-5 p-5 sm:p-6">
+            <div className="rounded-xl border border-[#d6e6de] bg-[#edf5f0] p-4">
+              <p className="flex items-center gap-2 font-semibold text-brand"><Layers size={18} aria-hidden="true"/>학교 안에서 시작하기 좋은 구성</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                {[
+                  [Monitor,'예약 화면','이 HTML을 index 파일로 저장'],
+                  [Database,'공용 예약 장부','Google Sheets에 예약 저장'],
+                  [Cloud,'서버와 배포 주소','Apps Script에서 함께 제공']
+                ].map(([Icon,title,text])=>(
+                  <div key={title} className="rounded-lg bg-white/80 p-3">
+                    <Icon size={17} className="mb-2 text-brand" aria-hidden="true"/>
+                    <p className="text-xs font-semibold">{title}</p><p className="mt-1 text-xs leading-5 text-slate-500">{text}</p>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-xs leading-6 text-[#476052]">Supabase·Netlify 가입이나 공개 API 키 입력 없이 시작할 수 있습니다. 다만 사용량 제한과 Google 계정 정책은 확인해야 합니다.</p>
+            </div>
+            <GuideNote warning>
+              <strong>이미 운영 중이라면 이렇게 업데이트하세요.</strong>
+              <p>Code.gs와 index의 내용을 각각 새 코드로 교체하고 setupBookingSystem을 다시 실행하세요. 기존 예약·고정 시간표는 유지되며 ‘특별실’ 시트가 추가됩니다. 이후 기존 배포를 새 버전으로 업데이트하세요. 특별실 시트의 번호와 머리글은 직접 변경하지 마세요.</p>
+            </GuideNote>
+            <GuideNote>
+              이 안내창이 자동으로 설치하거나 배포하지는 않습니다. 아래 서버 코드와 현재 전체 HTML을 각각 붙여 넣어야 합니다. 완료 체크는 개인 확인용이며 창을 닫으면 초기화됩니다.
+            </GuideNote>
+            <div>
+              <div className="mb-2 flex justify-between text-xs">
+                <span className="font-semibold">진행 순서</span><span className="text-slate-500">직접 확인 {done.filter(Boolean).length} / 5단계</span>
+              </div>
+              <div className="mb-4 flex gap-1.5" aria-hidden="true">
+                {done.map((v,i)=><div key={i} className={`h-1.5 flex-1 rounded-full ${v?'bg-brand':'bg-paper'}`}/>)}
+              </div>
+              <nav className="grid gap-2" aria-label="설치 안내 단계">
+                {titles.map(([title,description],i)=>(
+                  <button type="button" key={title} onClick={()=>selectStep(i)} aria-current={step===i?'step':undefined}
+                    className={`flex w-full items-center gap-3 rounded-lg border p-3 text-left ${step===i?'border-brand bg-emerald-50/60':'border-line hover:bg-paper'}`}>
+                    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${done[i]||step===i?'bg-brand text-white':'bg-paper text-slate-500'}`}>{done[i]?<Check size={14} aria-hidden="true"/>:i+1}</span>
+                    <span className="min-w-0 flex-1"><span className={`block text-sm font-semibold ${step===i?'text-brand':''}`}>{title}</span><span className="mt-0.5 block text-[11px] text-slate-500">{description}</span></span>
+                    <ChevronRight size={15} className="shrink-0 text-slate-400" aria-hidden="true"/>
+                  </button>
+                ))}
+              </nav>
+            </div>
+            <section className="rounded-xl border border-line p-4 sm:p-5" aria-labelledby="guide-step-title">
+              <div className="mb-5 border-b border-line pb-4">
+                <p className="mb-1 text-xs font-semibold">{step+1}단계</p>
+                <h3 id="guide-step-title" ref={headingRef} tabIndex="-1" className="text-lg font-bold tracking-tight">{titles[step][0]}</h3>
+              </div>
+              <div className="space-y-4 text-sm">
+                {step===0&&(
+                  <>
+                    <p className="leading-7 text-slate-600">특별실 몇 곳을 교직원이 함께 예약하는 용도라면 검토할 만합니다. 예약 장부를 직접 볼 수 있고 화면과 서버를 같은 곳에서 배포하므로 초기 구성이 단순합니다.</p>
+                    <GuideList>
+                      <li><strong className="text-ink">학교 Google Workspace 계정</strong>이 있는지 확인하세요. 담당자와 이용 교사가 같은 학교 조직 계정을 사용하는 구성을 전제로 합니다.</li>
+                      <li>학교에서 Apps Script 웹 앱 실행과 외부 CDN 사용을 허용하는지 확인하세요. 조직 정책으로 차단되면 담당 관리자에게 문의하세요.</li>
+                      <li>개인정보 저장·접근 권한·보관 기간이 학교 또는 교육청 지침에 맞는지 확인하세요. 학생 이름이나 민감한 정보는 예약에 넣지 마세요.</li>
+                      <li>운영 스프레드시트는 교사 전체에게 편집 공유하지 않습니다. <strong className="text-ink">교사는 웹 앱만 이용</strong>하고 원본 장부와 스크립트는 담당자만 관리합니다.</li>
+                    </GuideList>
+                    <GuideNote warning>
+                      <strong>개인 Gmail 계정끼리 사용하는 경우는 별도 검토가 필요합니다.</strong>
+                      <p>소유자 권한으로 실행되는 웹 앱에서는 접속자 이메일을 확인하지 못할 수 있습니다. 같은 Workspace 조직도 정책과 배포 설정에 따라 다릅니다. 이 코드는 이메일을 확인하지 못하면 접근을 차단합니다. 익명 공개로 바꿔 해결하지 마세요.</p>
+                    </GuideNote>
+                    <GuideNote>
+                      <strong>전용 데이터베이스와 다른 점도 있어요.</strong>
+                      <p>실행 시간·동시 실행·일일 사용량 제한이 있습니다. 화면은 20초마다 갱신하며 자료가 많아지면 느려질 수 있습니다. 대규모 운영이나 엄격한 감사·복구가 필요하면 전용 데이터베이스가 더 적합합니다.</p>
+                    </GuideNote>
+                  </>
+                )}
+                {step===1&&(
+                  <>
+                    <GuideList>
+                      <li>학교 계정으로 Google Sheets에서 <strong className="text-ink">새 스프레드시트</strong>를 만들고 이름을 ‘학교공간 예약 장부’로 지정하세요. 기존 설치라면 기존 장부를 사용하세요.</li>
+                      <li>상단의 <strong className="text-ink">확장 프로그램 → Apps Script</strong>를 누르세요.</li>
+                      <li><code>Code.gs</code> 내용을 모두 지우고 아래 서버 코드를 붙여 넣으세요.</li>
+                      <li>저장 후 함수 선택에서 <code>setupBookingSystem</code>을 선택해 <strong className="text-ink">실행</strong>하세요. 학교 계정으로 필요한 권한을 검토하고 허용하세요.</li>
+                      <li><strong className="text-ink">‘예약’, ‘고정시간표’, ‘특별실’</strong> 시트가 생기면 기본 설치가 끝납니다. 시연 예약은 자동으로 옮기지 않습니다.</li>
+                    </GuideList>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" onClick={copyCode} className={primaryClass}><Copy size={15} aria-hidden="true"/>서버 코드 복사</button>
+                      <button type="button" onClick={()=>downloadFile(serverCode,'Code.gs')} className={secondaryClass}><Download size={15} aria-hidden="true"/>서버 파일 받기</button>
+                      <button type="button" onClick={()=>setShowCode(v=>!v)} className={secondaryClass} aria-expanded={showCode}>{showCode?'코드 접기':'코드 보기'}</button>
+                    </div>
+                    {copyStatus&&<p role="status" className="text-xs leading-6 text-brand">{copyStatus}</p>}
+                    {showCode&&(
+                      <div>
+                        <label htmlFor="server-code" className="mb-2 block text-xs font-medium">Code.gs에 넣을 전체 서버 코드</label>
+                        <textarea id="server-code" name="serverCode" ref={codeRef} readOnly value={serverCode} rows={18} spellCheck="false" className={`${inputClass} resize-y font-mono text-xs leading-6`}/>
+                      </div>
+                    )}
+                    <GuideNote>최초 실행 계정이 관리자로 등록됩니다. 재실행해도 기존 예약과 관리자 설정은 유지합니다. 특별실을 추가·수정·삭제할 때는 원본 시트 대신 앱의 ‘특별실 관리’를 이용하세요.</GuideNote>
+                  </>
+                )}
+                {step===2&&(
+                  <>
+                    <GuideList>
+                      <li>파일 영역의 <strong className="text-ink">추가 → HTML</strong>을 누르고 이름을 소문자 <code>index</code>로 만드세요. 기존 설치는 기존 index 파일을 엽니다.</li>
+                      <li>기존 내용을 모두 지우고 <strong className="text-ink">이번 답변의 전체 HTML</strong>을 처음부터 끝까지 붙여 넣고 저장하세요.</li>
+                      <li><strong className="text-ink">프로젝트 설정 → 스크립트 속성</strong>에서 설치 함수가 만든 값을 확인하세요.</li>
+                      <li><code>ADMIN_EMAILS</code>에는 관리자 이메일, <code>TEACHER_EMAILS</code>에는 허용할 교사 이메일을 입력하세요. 여러 명이면 쉼표로 구분합니다. 관리자는 교사 목록에 중복 등록하지 않아도 됩니다.</li>
+                      <li>프로젝트 시간대를 <strong className="text-ink">서울</strong>로 설정하고 실제 학교 이메일과 일치하는지 확인하세요.</li>
+                    </GuideList>
+                    <div className="rounded-lg border border-line bg-paper p-4">
+                      <p className="mb-3 text-xs font-semibold">스크립트 속성의 역할</p>
+                      <dl className="space-y-3 text-xs leading-6">
+                        {[
+                          ['SPREADSHEET_ID','설치 함수가 현재 예약 장부의 ID를 자동 입력합니다.'],
+                          ['ADMIN_EMAILS','특별실과 고정 시간표를 추가·수정·삭제할 수 있는 계정입니다.'],
+                          ['TEACHER_EMAILS','예약을 조회·등록할 수 있는 교사 계정 목록입니다.'],
+                          ['REVISION / UPDATED_AT','앱이 자동 관리하는 변경 번호와 저장 시각입니다. 직접 수정하지 마세요.']
+                        ].map(([name,text])=><div key={name}><dt className="break-all font-mono font-semibold">{name}</dt><dd className="text-slate-500">{text}</dd></div>)}
+                      </dl>
+                    </div>
+                    <GuideNote warning>입력하는 이름은 표시용입니다. 권한은 Google 이메일로 판단합니다. 관리자도 다른 선생님의 일반 예약을 취소할 수 없습니다. 일정이 있는 특별실은 삭제 전에 해당 예약자에게 취소를 요청해야 합니다.</GuideNote>
+                    <p className="text-xs leading-6 text-slate-500">HTML에는 비밀번호나 비밀 키를 넣지 않습니다. 스프레드시트는 담당자만 편집하도록 유지하세요.</p>
+                  </>
+                )}
+                {step===3&&(
+                  <>
+                    <GuideList>
+                      <li>오른쪽 위 <strong className="text-ink">배포 → 새 배포</strong>를 누르고 <strong className="text-ink">웹 앱</strong>을 선택하세요.</li>
+                      <li><strong className="text-ink">실행 사용자</strong>는 배포 소유자인 ‘나’로 지정합니다. 원본 시트 권한 없이 서버가 대신 기록하는 방식입니다.</li>
+                      <li><strong className="text-ink">액세스 권한</strong>은 가능하면 학교 조직 내부 사용자로 제한하세요. 선택지는 계정·정책에 따라 다릅니다.</li>
+                      <li>배포 후 주소 끝이 <code>/exec</code>인 운영 주소를 여세요. 정상 연결되면 <strong className="text-ink">‘학교 공용 저장’</strong>이 표시됩니다.</li>
+                      <li>관리자 계정의 <strong className="text-ink">‘특별실 관리’</strong>에서 학교에 맞게 이름을 바꾸거나 공간을 추가하세요. 최초 예약 시간표는 비어 있는 것이 정상입니다.</li>
+                    </GuideList>
+                    <GuideNote warning>
+                      <strong>다른 교사 계정으로도 반드시 접속해 보세요.</strong>
+                      <p>소유자 계정에서만 성공했다고 완료된 것은 아닙니다. 교사 이메일을 확인할 수 없다면 학교 관리자와 인증 방식을 검토하세요. 익명 접근이나 원본 시트 전체 공유로 우회하지 마세요.</p>
+                    </GuideNote>
+                    <GuideNote>
+                      <strong>기존 주소를 유지하며 수정 사항 반영하기</strong>
+                      <p>저장만으로 운영 배포가 갱신되지 않습니다. ‘배포 관리’에서 기존 배포를 편집하고 새 버전을 선택해 배포하세요. 기존 설치는 서버 교체 후 setupBookingSystem 재실행도 필요합니다.</p>
+                    </GuideNote>
+                    <p className="text-xs leading-6 text-slate-500">Apps Script가 HTML도 제공하므로 별도 호스팅이 필수는 아닙니다. 학교망에서 외부 CDN을 차단하면 라이브러리 배포 방식을 별도로 조정해야 합니다.</p>
+                  </>
+                )}
+                {step===4&&(
+                  <>
+                    <p className="leading-7 text-slate-600">관리자와 일반 교사 계정으로 아래 항목을 확인한 뒤 주소를 공유하세요.</p>
+                    <ul className="space-y-3">
+                      {[
+                        ['공용 저장','예약과 특별실 변경이 다른 기기에서도 갱신하거나 약 20초 기다리면 보이는지 확인합니다.'],
+                        ['특별실 관리','새 공간 추가와 이름 수정을 확인합니다. 이름을 바꿔도 기존 일정이 유지되어야 합니다.'],
+                        ['안전한 삭제','일정이 있는 공간과 마지막 공간은 삭제되지 않아야 합니다. 빈 공간은 확인 후 삭제되어야 합니다.'],
+                        ['동시 예약 방지','두 계정이 같은 시간을 예약하면 한 건만 저장되어야 합니다.'],
+                        ['고정 수업 차단','고정 수업 시간의 일반 예약은 거절되고, 충돌하는 고정 시간표는 일부도 등록되지 않아야 합니다.'],
+                        ['권한 구분','일반 교사에게 특별실·고정 시간표 관리 버튼이 없어야 하며, 본인 예약만 취소할 수 있어야 합니다.'],
+                        ['등록되지 않은 계정 차단','허용 목록에 없거나 이메일을 확인할 수 없는 경우 접근이 차단되어야 합니다.'],
+                        ['연결 오류 표시','오류가 나면 브라우저 저장으로 몰래 전환하지 않고 오류를 표시해야 합니다.']
+                      ].map(([title,text])=>(
+                        <li key={title} className="flex gap-2.5">
+                          <CheckCircle size={17} className="mt-1 shrink-0 text-brand" aria-hidden="true"/>
+                          <div><p className="font-semibold">{title}</p><p className="mt-1 text-xs leading-6 text-slate-500">{text}</p></div>
+                        </li>
+                      ))}
+                    </ul>
+                    <GuideNote warning>
+                      <strong>동시성 보장의 범위</strong>
+                      <p>앱의 읽기·쓰기는 같은 Apps Script 잠금으로 순서대로 처리합니다. 특별실 삭제 시에도 일정을 다시 확인합니다. 다만 시트를 직접 수정하거나 다른 스크립트로 기록하면 이 보호를 우회합니다. 운영 자료는 웹 앱에서만 수정하세요.</p>
+                    </GuideNote>
+                    <GuideNote>통신이 끊기면 저장되었지만 응답만 받지 못한 경우도 있습니다. 반복 등록보다 먼저 갱신하여 확인하세요. 정기 백업·보관 기간·담당자 계정 인계도 준비해 주세요.</GuideNote>
+                  </>
+                )}
+              </div>
+              <label className="mt-6 flex cursor-pointer items-start gap-2.5 border-t border-line pt-4 text-xs leading-6 text-slate-600">
+                <input type="checkbox" checked={done[step]} onChange={()=>setDone(prev=>prev.map((v,i)=>i===step?!v:v))} className="mt-1 h-4 w-4 shrink-0 accent-[#147366]"/>
+                <span>이 단계의 실제 작업과 확인을 마쳤습니다.<span className="block text-[11px] text-slate-500">개인 확인용이며 실제 연결을 검사하지 않습니다.</span></span>
+              </label>
+              <div className="mt-4 flex justify-between gap-3">
+                <button type="button" onClick={()=>selectStep(step-1)} disabled={step===0} className={`${secondaryClass} text-xs`}>이전 단계</button>
+                {step<4?<button type="button" onClick={()=>selectStep(step+1)} className={`${primaryClass} text-xs`}>다음 안내<ArrowRight size={14} aria-hidden="true"/></button>
+                  :<button type="button" onClick={onClose} className={`${primaryClass} text-xs`}>안내 닫기</button>}
+              </div>
+            </section>
+            <div className="rounded-lg border border-line">
+              <button type="button" onClick={()=>setShowTerms(v=>!v)} aria-expanded={showTerms} aria-controls="guide-terms"
+                className="flex w-full items-center justify-between gap-2 p-4 text-left text-xs font-semibold">
+                낯선 용어를 쉽게 설명해 주세요<ChevronDown size={16} className={`transition-transform ${showTerms?'rotate-180':''}`} aria-hidden="true"/>
+              </button>
+              {showTerms&&(
+                <dl id="guide-terms" className="space-y-3 border-t border-line p-4 text-xs leading-6">
+                  {[
+                    ['Google Sheets','모든 선생님의 예약과 특별실 정보를 보관하는 공용 장부입니다.'],
+                    ['Apps Script','로그인 계정을 확인하고 장부를 읽거나 기록하는 Google의 서버 실행 도구입니다.'],
+                    ['스크립트 속성','연결 장부와 허용 계정 목록을 서버에 보관하는 설정입니다.'],
+                    ['잠금','같은 시간의 요청을 한 번에 하나씩 처리하는 장치입니다.'],
+                    ['특별실번호','이름과 별개인 고유 번호입니다. 이름이 바뀌어도 예약을 연결하므로 직접 수정하지 않습니다.'],
+                    ['웹 앱 배포','다른 사람이 접속할 수 있는 인터넷 주소로 화면을 제공하는 일입니다.']
+                  ].map(([title,text])=><div key={title}><dt className="font-semibold">{title}</dt><dd className="mt-0.5 text-slate-500">{text}</dd></div>)}
+                </dl>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+              <p className="max-w-sm text-xs leading-6 text-slate-500">현재 화면의 특별실·예약 자료를 별도 파일로 보관합니다. 공용 장부로 자동 업로드하지 않습니다.</p>
+              <button type="button" onClick={()=>downloadFile(JSON.stringify({...data,exportedAt:new Date().toISOString()},null,2),`학교공간-예약자료-${iso(new Date())}.json`,'application/json')}
+                className={`${secondaryClass} text-xs`}><Download size={15} aria-hidden="true"/>예약 자료 내보내기</button>
+            </div>
+          </div>
+        </Modal>
+      );
+    }
+
+    function App() {
+      const [data,setData]=useState(()=>isHosted?emptyData():initialData());
+      const dataRef=useRef(data);
+      dataRef.current=data;
+      const [user,setUser]=useState(null);
+      const [loading,setLoading]=useState(true);
+      const [refreshing,setRefreshing]=useState(false);
+      const [storageError,setStorageError]=useState('');
+      const [serverError,setServerError]=useState('');
+      const [lastSync,setLastSync]=useState(null);
+      const [roomId,setRoomId]=useState('computer');
+      const [week,setWeek]=useState(()=>monday(new Date()));
+      const [selectedDay,setSelectedDay]=useState(()=>Math.min((new Date().getDay()+6)%7,4));
+      const [view,setView]=useState('week');
+      const [filter,setFilter]=useState('all');
+      const [drawer,setDrawer]=useState(false);
+      const [modal,setModal]=useState(null);
+      const [toast,setToast]=useState('');
+      const toastTimer=useRef(null);
+      const fetching=useRef(false);
+      const active=useRef(true);
+      const menuButtonRef=useRef(null);
+      const drawerRef=useRef(null);
+      const rooms=data.rooms;
+      const room=rooms.find(r=>r.id===roomId)||rooms[0]||null;
+      const currentRoomId=room?.id||'';
+      const RoomIcon=roomIcon(room);
+      const dates=Array.from({length:5},(_,i)=>iso(addDays(week,i)));
+      const today=iso(new Date());
+      const canManage=!isHosted||!!user?.isAdmin;
+      const available=!loading&&(!isHosted||(!!user&&!serverError));
+
+      useEffect(()=>{
+        if(room&&room.id!==roomId)setRoomId(room.id);
+      },[room?.id,roomId]);
+
+      function acceptResponse(result) {
+        if(!result?.data||!result.user?.email||!Array.isArray(result.data.rooms)||
+          !Array.isArray(result.data.bookings)||!Array.isArray(result.data.rules)){
+          throw new Error('서버 응답 형식이 올바르지 않습니다. 최신 서버 코드로 교체하고 setupBookingSystem을 다시 실행한 뒤 새 버전으로 배포해 주세요.');
+        }
+        if(!active.current)return;
+        if(Number(result.data.revision)>=Number(dataRef.current.revision??-1)){
+          dataRef.current=result.data;setData(result.data);setUser(result.user);
+        }
+        setServerError('');setLastSync(new Date());
+      }
+      async function refresh() {
+        if(!isHosted||fetching.current)return;
+        fetching.current=true;
+        if(active.current)setRefreshing(true);
+        try{acceptResponse(await callServer('getInitialState'));}
+        catch(error){
+          if(active.current){
+            setServerError(error.message);
+            dataRef.current=emptyData();setData(emptyData());setUser(null);
+          }
+        }finally{
+          fetching.current=false;
+          if(active.current){setRefreshing(false);setLoading(false);}
+        }
+      }
+      useEffect(()=>{
+        active.current=true;
+        let interval;
+        if(isHosted){
+          refresh();
+          interval=setInterval(()=>{if(!document.hidden)refresh();},20000);
+        }else{
+          try{
+            const raw=localStorage.getItem(storageKey);
+            if(raw){
+              const saved=JSON.parse(raw);
+              if(!Array.isArray(saved.bookings)||!Array.isArray(saved.rules))throw new Error();
+              // 以前 버전의 브라우저 자료에 특별실 목록을 추가합니다.
+              if(!Array.isArray(saved.rooms))saved.rooms=defaultRooms.map(r=>({...r}));
+              const roomIds=new Set(saved.rooms.map(r=>r.id));
+              const validRooms=saved.rooms.length>0&&roomIds.size===saved.rooms.length&&saved.rooms.every(r=>
+                typeof r.id==='string'&&typeof r.name==='string'&&r.name.trim()&&
+                Number.isInteger(r.capacity)&&r.capacity>=1&&r.capacity<=1000);
+              const validRules=saved.rules.every(r=>
+                roomIds.has(r.roomId)&&Array.isArray(r.days)&&r.days.every(d=>Number.isInteger(d)&&d>=0&&d<=4)&&
+                Number.isInteger(r.startPeriod)&&r.startPeriod>=1&&Number.isInteger(r.endPeriod)&&
+                r.endPeriod<=8&&r.endPeriod>=r.startPeriod&&/^\d{4}-\d{2}-\d{2}$/.test(r.startDate)&&
+                /^\d{4}-\d{2}-\d{2}$/.test(r.endDate)&&typeof r.teacher==='string'&&typeof r.purpose==='string');
+              const validBookings=saved.bookings.every(b=>
+                roomIds.has(b.roomId)&&/^\d{4}-\d{2}-\d{2}$/.test(b.date)&&Number.isInteger(b.period)&&
+                b.period>=1&&b.period<=8&&typeof b.teacher==='string'&&typeof b.purpose==='string');
+              if(!validRooms||!validRules||!validBookings)throw new Error();
+              saved.revision=saved.revision||0;
+              dataRef.current=saved;setData(saved);
+            }
+          }catch{setStorageError('저장 자료를 불러오지 못해 예시 시간표를 표시합니다. 브라우저 저장 권한을 확인해 주세요.');}
+          setLoading(false);
+        }
+        return ()=>{active.current=false;clearInterval(interval);clearTimeout(toastTimer.current);};
+      },[]);
+
+      useEffect(()=>{
+        if(!drawer)return;
+        const old=document.body.style.overflow;
+        document.body.style.overflow='hidden';
+        const previous=document.activeElement;
+        const focusable=()=>[...drawerRef.current.querySelectorAll('a[href],button:not([disabled])')].filter(el=>el.offsetParent!==null);
+        focusable()[0]?.focus();
+        const handler=e=>{
+          if(e.key==='Escape')setDrawer(false);
+          if(e.key==='Tab'){
+            const list=focusable(),first=list[0],last=list[list.length-1];
+            if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}
+            else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}
+          }
+        };
+        window.addEventListener('keydown',handler);
+        return ()=>{
+          document.body.style.overflow=old;window.removeEventListener('keydown',handler);
+          if(previous?.isConnected)previous.focus();
+        };
+      },[drawer]);
+
+      function notify(message) {
+        setToast(message);clearTimeout(toastTimer.current);
+        toastTimer.current=setTimeout(()=>setToast(''),4500);
+      }
+      function commit(next) {
+        const updated={...next,updatedAt:new Date().toISOString(),revision:Number(next.revision||0)+1};
+        dataRef.current=updated;setData(updated);
+        try{localStorage.setItem(storageKey,JSON.stringify(updated));setStorageError('');return true;}
+        catch{
+          setStorageError('브라우저에 저장하지 못했습니다. 현재 변경은 임시 상태이며 새로고침하면 사라집니다. 자료를 내보내 보관해 주세요.');
+          return false;
+        }
+      }
+      async function mutate(method,payload) {
+        try{acceptResponse(await callServer(method,payload));return null;}
+        catch(error){return `${error.message} 통신 오류라면 갱신하여 실제 저장 결과를 먼저 확인해 주세요.`;}
+      }
+      function hasRoom(id) { return dataRef.current.rooms.some(r=>r.id===id); }
+
+      async function saveBooking(booking) {
+        if(isHosted){
+          if(!available)return '연결 상태를 먼저 확인해 주세요.';
+          const error=await mutate('createBooking',booking);
+          if(error)return error;
+          if(active.current){setModal(null);notify('공용 장부에 예약을 등록했습니다.');}
+          return null;
+        }
+        const current=dataRef.current;
+        if(!hasRoom(booking.roomId))return '삭제된 특별실입니다. 다른 특별실을 선택해 주세요.';
+        if(getSlot(current,booking.roomId,booking.date,booking.period).type!=='free')
+          return '이 시간에 다른 일정이 있습니다. 다른 시간을 선택해 주세요.';
+        const saved=commit({...current,bookings:[...current.bookings,booking]});
+        setModal(null);notify(saved?'이 브라우저에 예약을 등록했습니다.':'임시로 반영했습니다. 브라우저 저장에 실패했습니다.');
+        return null;
+      }
+      async function saveRule(rule) {
+        if(isHosted){
+          if(!available||!canManage)return '관리자 권한과 연결 상태를 확인해 주세요.';
+          const error=await mutate('createRule',rule);
+          if(error)return error;
+          if(active.current){setModal(null);notify('공용 장부에 고정 시간표를 등록했습니다.');}
+          return null;
+        }
+        const current=dataRef.current;
+        if(!hasRoom(rule.roomId))return '존재하지 않는 특별실입니다.';
+        let count=0,conflicts=0;
+        for(let date=parseDate(rule.startDate);iso(date)<=rule.endDate;date=addDays(date,1)){
+          if(!rule.days.includes((date.getDay()+6)%7))continue;
+          for(let period=rule.startPeriod;period<=rule.endPeriod;period++){
+            count++;if(getSlot(current,rule.roomId,iso(date),period).type!=='free')conflicts++;
+          }
+        }
+        if(!count)return '선택한 기간에 해당하는 요일이 없습니다. 적용 기간이나 반복 요일을 변경해 주세요.';
+        if(conflicts)return `기존 일정과 겹치는 시간이 ${formatNumber(conflicts)}교시 있습니다. 등록된 내용은 없습니다.`;
+        const saved=commit({...current,rules:[...current.rules,rule]});
+        setModal(null);notify(saved?`${formatNumber(count)}교시의 고정 수업을 일괄 등록했습니다.`:'임시로 반영했습니다. 브라우저 저장에 실패했습니다.');
+        return null;
+      }
+      async function deleteBooking(id) {
+        if(isHosted){const error=await mutate('cancelBooking',id);if(error)return error;}
+        else commit({...dataRef.current,bookings:dataRef.current.bookings.filter(b=>b.id!==id)});
+        if(active.current){setModal(null);notify('예약을 취소했습니다. 다시 예약할 수 있습니다.');}
+        return null;
+      }
+      async function deleteRule(id) {
+        if(isHosted){const error=await mutate('deleteRule',id);if(error)return error;}
+        else commit({...dataRef.current,rules:dataRef.current.rules.filter(r=>r.id!==id)});
+        if(active.current)notify('고정 시간표를 해제했습니다.');
+        return null;
+      }
+      async function saveRoom(input,editing=false) {
+        if(!available||!canManage)return '관리자 권한과 연결 상태를 확인해 주세요.';
+        if(isHosted)return await mutate(editing?'updateRoom':'createRoom',input);
+        const current=dataRef.current;
+        if(editing&&!hasRoom(input.id))return '이미 삭제된 특별실입니다.';
+        if(current.rooms.some(r=>r.id!==(editing?input.id:null)&&r.name.normalize('NFKC').toLowerCase()===input.name.normalize('NFKC').toLowerCase()))
+          return '같은 이름의 특별실이 있습니다. 다른 이름을 입력해 주세요.';
+        const nextRooms=editing?current.rooms.map(r=>r.id===input.id?{...r,...input}:r):[...current.rooms,{...input,id:makeId()}];
+        const saved=commit({...current,rooms:nextRooms});
+        if(!saved)notify('임시로 반영했습니다. 브라우저 저장에 실패했습니다.');
+        return null;
+      }
+      async function deleteRoom(id) {
+        if(!available||!canManage)return '관리자 권한과 연결 상태를 확인해 주세요.';
+        if(isHosted)return await mutate('deleteRoom',id);
+        const current=dataRef.current;
+        if(!hasRoom(id))return '이미 삭제된 특별실입니다.';
+        if(current.rooms.length<=1)return '최소 한 개의 특별실은 남겨 두어야 합니다.';
+        if(current.bookings.some(b=>b.roomId===id)||current.rules.some(r=>r.roomId===id))
+          return '예약 또는 고정 시간표가 남아 있어 삭제할 수 없습니다. 연결된 일정을 먼저 정리해 주세요.';
+        const saved=commit({...current,rooms:current.rooms.filter(r=>r.id!==id)});
+        if(!saved)notify('임시로 반영했습니다. 브라우저 저장에 실패했습니다.');
+        return null;
+      }
+
+      const stats={free:0,booked:0,fixed:0};
+      if(room)dates.forEach(date=>periods.forEach((_,i)=>stats[getSlot(data,currentRoomId,date,i+1).type]++));
+      function open(type) {
+        setDrawer(false);
+        if((type==='recurring'||type==='rooms')&&(!canManage||!available))return;
+        // 모바일 메뉴가 닫히며 포커스가 복귀한 뒤 모달을 엽니다.
+        if(drawer)setTimeout(()=>setModal({type}),0);
+        else setModal({type});
+      }
+      function goToday() {
+        setWeek(monday(new Date()));setSelectedDay(Math.min((new Date().getDay()+6)%7,4));
+      }
+      function move(direction) {
+        if(view==='day'){
+          let next=selectedDay+direction;
+          if(next<0){setWeek(w=>addDays(w,-7));next=4;}
+          if(next>4){setWeek(w=>addDays(w,7));next=0;}
+          setSelectedDay(next);
+        }else setWeek(w=>addDays(w,direction*7));
+      }
+
+      function Sidebar({mobile=false}) {
+        return (
+          <div className="flex h-full flex-col">
+            <a href="#main" onClick={()=>mobile&&setDrawer(false)} className="flex items-center gap-2.5 px-6 py-7">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand text-white"><Layers size={21} aria-hidden="true"/></span>
+              <div><span className="text-xl font-extrabold tracking-tight">학교공간<span className="text-brand">.</span></span><p className="mt-0.5 text-[11px] font-medium text-slate-500">수업을 위한 공간, 함께 쓰다</p></div>
+            </a>
+            {mobile&&<button type="button" className="absolute right-3 top-3 rounded-lg p-2 hover:bg-paper" aria-label="메뉴 닫기" onClick={()=>setDrawer(false)}><X size={18} aria-hidden="true"/></button>}
+            <div className="px-4">
+              <div className="mb-6 flex items-center gap-2.5 rounded-lg border border-line bg-paper px-3 py-3">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-line bg-white"><Grid size={15} className="text-slate-600" aria-hidden="true"/></span>
+                <div><p className="text-xs font-semibold">우리 학교</p><p className="mt-0.5 text-[11px] text-slate-500">특별실 예약 서비스</p></div>
+              </div>
+              <p className="mb-2 px-3 text-[11px] font-semibold tracking-wide text-slate-500">공간 예약</p>
+              <div className="mb-4 flex items-center gap-2.5 rounded-lg bg-[#e8f2ef] px-3 py-3 font-semibold text-brand">
+                <Calendar size={18} aria-hidden="true"/>예약 캘린더<span className="ml-auto h-1.5 w-1.5 rounded-full bg-brand"/>
+              </div>
+              <div className="mb-2 flex items-center justify-between px-3">
+                <p className="text-[11px] font-semibold text-slate-500">특별실 선택</p>
+                <span className="text-[11px] text-slate-500">{formatNumber(rooms.length)}</span>
+              </div>
+              <nav aria-label="특별실 선택" className="space-y-1">
+                {rooms.map(r=>{
+                  const Icon=roomIcon(r);
+                  return (
+                    <button type="button" key={r.id} aria-pressed={r.id===currentRoomId}
+                      onClick={()=>{setRoomId(r.id);setDrawer(false);setFilter('all');}}
+                      className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors ${r.id===currentRoomId?'bg-white font-semibold text-brand ring-1 ring-inset ring-line shadow-soft':'text-slate-600 hover:bg-white'}`}>
+                      <Icon size={17} className="shrink-0" aria-hidden="true"/>
+                      <span className="min-w-0 flex-1 truncate" title={r.name}>{r.name}</span>
+                      {r.location&&<span className="max-w-[70px] truncate text-[11px] font-normal text-slate-500" title={r.location}>{r.location}</span>}
+                    </button>
+                  );
+                })}
+                {!rooms.length&&<p className="px-3 py-3 text-xs leading-6 text-slate-500">{loading?'특별실을 불러오는 중…':'특별실 목록을 확인해 주세요.'}</p>}
+              </nav>
+              <div className="my-5 border-t border-line"/>
+              {canManage?(
+                <div className="space-y-1">
+                  <button type="button" onClick={()=>open('rooms')} disabled={!available}
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-slate-600 hover:bg-white disabled:opacity-50">
+                    <Settings size={17} aria-hidden="true"/>특별실 관리
+                  </button>
+                  <button type="button" onClick={()=>open('recurring')} disabled={!available||!room}
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-slate-600 hover:bg-white disabled:opacity-50">
+                    <RefreshCw size={17} aria-hidden="true"/>고정 시간표 관리
+                  </button>
+                </div>
+              ):<p className="px-3 text-xs leading-6 text-slate-500"><Lock size={13} className="mr-1 inline" aria-hidden="true"/>특별실과 고정 시간표는 관리자만 변경할 수 있습니다.</p>}
+            </div>
+            <div className="mt-auto px-4 pb-5 pt-12">
+              <div className="rounded-xl border border-line bg-white p-4">
+                <span className="mb-3 flex h-8 w-8 items-center justify-center rounded-lg bg-paper text-brand"><Database size={17} aria-hidden="true"/></span>
+                <p className="text-xs font-semibold">{isHosted?'Google Sheets 연결 방식':'선생님들과 함께 사용하기'}</p>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">스프레드시트 하나로<br/>학교의 예약을 함께 관리해요.</p>
+                <button type="button" onClick={()=>open('deployment')} className="mt-3 flex items-center gap-1 text-xs font-semibold text-brand hover:underline">설치·배포 안내<ArrowRight size={13} aria-hidden="true"/></button>
+              </div>
+              <div className="mt-5 flex items-center gap-2 px-1 text-[11px] text-slate-500">
+                <span className={`h-1.5 w-1.5 rounded-full ${isHosted?'bg-brand':'bg-slate-400'}`}/>{isHosted?'Google Sheets 공용 저장':'브라우저 저장 모드'}
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      function Cell({date,period}) {
+        const status=getSlot(data,currentRoomId,date,period);
+        const dimmed=filter!=='all'&&filter!==status.type;
+        return (
+          <div className="min-w-0 border-b border-r border-line p-1.5 last:border-r-0">
+            <button type="button" disabled={!available||!room} onClick={()=>setModal({type:'booking',date,period,roomId:currentRoomId})}
+              aria-label={`${fullDate(date)} ${period}교시, ${status.type==='free'?'예약 가능':status.type==='fixed'?`고정 수업, ${status.entry.purpose}`:`예약 완료, ${status.entry.purpose}`}`}
+              className={`group relative flex h-[76px] w-full flex-col rounded-md border p-2 text-left transition-colors disabled:cursor-not-allowed ${dimmed?'opacity-30':''} ${status.type==='fixed'?'fixed-slot border-[#e5e9e7] bg-[#f1f3f2] hover:bg-[#e9eeeb]':status.type==='booked'?'border-[#c9e5dc] bg-[#edf7f2] hover:bg-[#e0f0e9]':'border-transparent bg-white hover:border-[#b9d8cf] hover:bg-[#f1f8f5]'}`}>
+              {loading?(
+                <div className="w-full space-y-2 py-1"><div className="h-3 w-2/3 animate-pulse rounded bg-slate-100"/><div className="h-2.5 w-1/3 animate-pulse rounded bg-slate-100"/></div>
+              ):!available?(
+                <span className="m-auto text-xs text-slate-500">연결 확인 필요</span>
+              ):status.type==='free'?(
+                <div className="flex h-full w-full items-center justify-center gap-1 text-xs text-[#60746a] group-hover:text-brand">
+                  <Plus size={13} className="opacity-0 group-hover:opacity-100" aria-hidden="true"/><span>예약 가능</span>
+                </div>
+              ):(
+                <>
+                  <div className={`mb-1 flex items-center gap-1 text-[10px] font-medium ${status.type==='booked'?'text-brand':'text-slate-600'}`}>
+                    {status.type==='fixed'?<Lock size={10} aria-hidden="true"/>:<span className="h-1 w-1 rounded-full bg-brand"/>}{status.type==='fixed'?'고정 수업':'예약 완료'}
+                  </div>
+                  <p className={`w-full truncate text-xs font-semibold ${status.type==='booked'?'text-[#245b46]':'text-[#4c5b54]'}`}>{status.entry.purpose}</p>
+                  <p className="mt-auto w-full truncate text-[10px] text-slate-500">{status.entry.teacher} 선생님</p>
+                </>
+              )}
+            </button>
+          </div>
+        );
+      }
+      function CalendarTable({single=false}) {
+        const shownDates=single?[dates[selectedDay]]:dates;
+        return (
+          <div className={single?'day-grid':'calendar-grid'}>
+            <div className="flex items-center justify-center border-b border-r border-line bg-[#fafbf9] text-[11px] font-medium text-slate-500">교시</div>
+            {shownDates.map(date=>(
+              <div key={date} className={`flex h-[66px] items-center justify-center gap-2 border-b border-r border-line last:border-r-0 ${date===today?'bg-[#f1f8f4]':'bg-[#fafbf9]'}`}>
+                <span className={`text-[13px] font-medium ${date===today?'text-brand':'text-slate-500'}`}>{dayNames[(parseDate(date).getDay()+6)%7]}</span>
+                <span className={`flex h-8 w-8 items-center justify-center rounded-full text-base font-semibold tabular-nums ${date===today?'bg-brand text-white':'text-ink'}`}>{parseDate(date).getDate()}</span>
+                {date===today&&<span className="hidden text-[10px] font-medium text-brand lg:inline">오늘</span>}
+              </div>
+            ))}
+            {periods.map((times,index)=>(
+              <React.Fragment key={index}>
+                {index===4&&<div className="col-span-full flex h-7 items-center justify-center gap-2 border-b border-line bg-[#fafbf9] text-[10px] tracking-wide text-slate-500"><Clock size={11} aria-hidden="true"/>점심시간 · 12:30 ~ 13:30</div>}
+                <div className="flex flex-col items-center justify-center border-b border-r border-line bg-white">
+                  <span className="text-xs font-semibold">{index+1}교시</span>
+                  <span className="mt-1.5 text-[10px] tabular-nums leading-relaxed text-slate-500">{times[0]}<br/>{times[1]}</span>
+                </div>
+                {shownDates.map(date=><Cell key={`${date}-${index}`} date={date} period={index+1}/>)}
+              </React.Fragment>
+            ))}
+          </div>
+        );
+      }
+
+      const bookingRoom=modal?.type==='booking'?rooms.find(r=>r.id===modal.roomId):null;
+
+      return (
+        <div className="flex min-h-screen">
+          <a href="#main" className="fixed left-4 top-3 z-[70] -translate-y-20 rounded-lg bg-brand px-4 py-2 text-white focus:translate-y-0">본문 바로가기</a>
+          <aside className="sticky top-0 hidden h-screen w-[232px] shrink-0 overflow-y-auto border-r border-line bg-[#f1f4f2] scrollbar lg:block"><Sidebar/></aside>
+          {drawer&&(
+            <div className="fixed inset-0 z-40 bg-[#142c25]/40 lg:hidden" onClick={()=>setDrawer(false)}>
+              <aside ref={drawerRef} role="dialog" aria-modal="true" aria-label="모바일 메뉴"
+                className="relative h-full w-[280px] max-w-[88vw] overflow-y-auto bg-[#f1f4f2]" onClick={e=>e.stopPropagation()}><Sidebar mobile/></aside>
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <header className="flex h-[72px] items-center justify-between gap-3 border-b border-line bg-white px-4 sm:px-7 lg:px-9">
+              <div className="flex min-w-0 items-center gap-3 text-xs">
+                <button type="button" ref={menuButtonRef} className="rounded-lg p-1.5 hover:bg-paper lg:hidden" aria-label="메뉴 열기" aria-expanded={drawer} onClick={()=>setDrawer(true)}><Menu size={21} aria-hidden="true"/></button>
+                <span className="hidden text-slate-500 sm:inline">공간 관리</span><ChevronRight size={13} className="hidden text-slate-400 sm:block" aria-hidden="true"/><span className="truncate font-medium">특별실 예약</span>
+              </div>
+              <div className="flex shrink-0 items-center gap-3 sm:gap-5">
+                <button type="button" onClick={()=>open('deployment')} className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-brand">
+                  <span className={`h-1.5 w-1.5 rounded-full ${isHosted?'bg-brand':'bg-amber-600'}`}/><span>{isHosted?'학교 공용 저장':'시연 모드'}</span><Info size={13} aria-hidden="true"/>
+                </button>
+                <div className="h-5 border-l border-line"/>
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full border border-line bg-paper text-slate-600"><User size={16} aria-hidden="true"/></span>
+                  <span className="hidden text-xs font-medium sm:block">{isHosted?(user?(user.isAdmin?'관리자':'교사'):'계정 확인 중'):'교사 미리보기'}</span>
+                </div>
+              </div>
+            </header>
+            <main id="main" tabIndex="-1" className="mx-auto max-w-[1480px] px-4 py-6 sm:px-7 lg:px-9 lg:py-8">
+              <section className="mb-6 flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <div className="mb-2 flex items-center gap-2 text-xs font-medium text-brand"><span className="h-1.5 w-1.5 rounded-full bg-brand"/>공간이 연결되는 학교</div>
+                  <h1 className="text-[26px] font-bold tracking-tight sm:text-[28px]">특별실 예약</h1>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-500">필요한 공간을 확인하고, 수업에 맞는 시간을 예약하세요.</p>
+                </div>
+                {canManage&&(
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={()=>open('rooms')} disabled={!available} className={`${secondaryClass} text-xs shadow-soft`}><Settings size={15} aria-hidden="true"/>특별실 관리</button>
+                    <button type="button" onClick={()=>open('recurring')} disabled={!available||!room} className={`${secondaryClass} text-xs shadow-soft`}><RefreshCw size={15} aria-hidden="true"/>고정 시간표 관리</button>
+                  </div>
+                )}
+              </section>
+              <div className="mb-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#dce7e0] bg-[#edf3ef] px-3.5 py-3 text-xs text-[#476052]">
+                <p className="flex min-w-0 items-start gap-2 leading-relaxed">
+                  {isHosted?<Database size={15} className="mt-0.5 shrink-0" aria-hidden="true"/>:<Info size={15} className="mt-0.5 shrink-0" aria-hidden="true"/>}
+                  <span className="min-w-0">{isHosted?<>Google Sheets에 함께 저장합니다. 변경 사항은 약 20초마다 확인합니다.{user&&<span className="mt-1 block break-all">로그인: {user.email}</span>}</>:'예시 시간표가 포함된 시연 화면입니다. 예약과 특별실 변경은 이 브라우저에만 저장되며 다른 사용자와 공유되지 않습니다.'}</span>
+                </p>
+                {isHosted?(
+                  <button type="button" disabled={refreshing} onClick={refresh} className="ml-auto flex shrink-0 items-center gap-1.5 font-semibold text-brand disabled:opacity-50">
+                    <RefreshCw size={13} className={refreshing?'animate-spin':''} aria-hidden="true"/>{refreshing?'확인하는 중…':'지금 갱신'}
+                  </button>
+                ):<button type="button" onClick={()=>open('deployment')} className="ml-auto flex shrink-0 items-center gap-1 font-semibold text-brand hover:underline">공유 서비스로 운영하기<ArrowRight size={13} aria-hidden="true"/></button>}
+              </div>
+              {(storageError||serverError)&&(
+                <div role="alert" className="mb-5 flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-6 text-red-800">
+                  <AlertCircle size={16} className="mt-1 shrink-0" aria-hidden="true"/>
+                  <div className="min-w-0">
+                    <p className="break-words">{serverError||storageError}</p>
+                    {isHosted&&<p>공용 저장 연결에 실패했습니다. 브라우저 저장으로 전환하지 않습니다.</p>}
+                    <div className="mt-1 flex flex-wrap gap-3">
+                      {isHosted&&<button type="button" disabled={refreshing} onClick={refresh} className="font-semibold underline">다시 연결</button>}
+                      <button type="button" onClick={()=>open('deployment')} className="font-semibold underline">{isHosted?'설치 안내 확인':'자료 내보내기'}</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              <section className="overflow-hidden rounded-xl border border-line bg-white shadow-soft" aria-label="특별실 예약 캘린더">
+                <div className="flex flex-wrap items-center justify-between gap-4 p-4 sm:px-5">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#edf5f1] text-brand"><RoomIcon size={22} aria-hidden="true"/></span>
+                    <div className="min-w-0">
+                      <h2 className="break-words text-lg font-bold tracking-tight">{room?.name||(loading?'특별실 불러오는 중…':'특별실 목록 확인')}</h2>
+                      {room&&<p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                        <span className="flex min-w-0 items-center gap-1"><MapPin size={11} className="shrink-0" aria-hidden="true"/><span className="break-words">{room.location||'위치 미등록'}</span></span>
+                        <span>·</span><span>정원 {formatNumber(room.capacity)}명</span>
+                        {room.description&&<span className="hidden break-words xl:inline">· {room.description}</span>}
+                      </p>}
+                    </div>
+                  </div>
+                  <select aria-label="특별실 선택" disabled={!rooms.length} className="max-w-full rounded-lg border border-line bg-white px-3 py-2 text-xs lg:hidden" value={currentRoomId} onChange={e=>{setRoomId(e.target.value);setFilter('all');}}>
+                    {!rooms.length&&<option value="">특별실 없음</option>}
+                    {rooms.map(r=><option value={r.id} key={r.id}>{r.name}</option>)}
+                  </select>
+                  <div className="hidden items-center gap-2 rounded-md bg-paper px-2.5 py-1.5 text-[11px] text-slate-500 lg:flex"><Calendar size={13} aria-hidden="true"/>평일 1~8교시 운영</div>
+                </div>
+                <div className="mx-4 grid grid-cols-3 divide-x divide-line border-y border-line py-4 sm:mx-5">
+                  {[
+                    ['예약 가능',stats.free,'text-brand','bg-brand'],
+                    ['일반 예약',stats.booked,'text-ink','bg-[#6b9f86]'],
+                    ['고정 수업',stats.fixed,'text-ink','bg-slate-400']
+                  ].map(([label,count,color,dot])=>(
+                    <div key={label} className="px-3 first:pl-0 sm:px-6">
+                      <p className="mb-1.5 flex items-center gap-1.5 text-[11px] text-slate-500"><span className={`h-1.5 w-1.5 rounded-full ${dot}`}/>{label}<span className="hidden text-[10px] text-slate-500 sm:inline">선택 주간</span></p>
+                      <p className={`text-2xl font-semibold tabular-nums tracking-tight ${color}`}>{!available||!room?'—':formatNumber(count)}<span className="ml-1.5 text-[11px] font-normal text-slate-500">교시</span></p>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-4 p-4 sm:px-5">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h3 className="text-base font-semibold tracking-tight tabular-nums">
+                      {new Intl.DateTimeFormat('ko-KR',{year:'numeric',month:'long'}).format(week)}
+                      <span className="ml-2 text-sm font-medium text-slate-500">{parseDate(dates[0]).getDate()}일 ~ {parseDate(dates[4]).getMonth()!==parseDate(dates[0]).getMonth()?`${parseDate(dates[4]).getMonth()+1}월 `:''}{parseDate(dates[4]).getDate()}일</span>
+                    </h3>
+                    <div className="flex items-center gap-1">
+                      <button type="button" aria-label={view==='week'?'이전 주':'이전 평일'} onClick={()=>move(-1)} className="rounded-md border border-line p-1.5 hover:bg-paper"><ChevronRight size={14} className="rotate-180" aria-hidden="true"/></button>
+                      <button type="button" aria-label={view==='week'?'다음 주':'다음 평일'} onClick={()=>move(1)} className="rounded-md border border-line p-1.5 hover:bg-paper"><ChevronRight size={14} aria-hidden="true"/></button>
+                      <button type="button" onClick={goToday} className="ml-1 rounded-md border border-line px-2.5 py-1.5 text-[11px] font-medium hover:bg-paper">오늘</button>
+                    </div>
+                  </div>
+                  <div className="hidden items-center rounded-lg bg-paper p-1 md:flex" aria-label="캘린더 보기 방식">
+                    {[['week','주간'],['day','일간']].map(([value,label])=><button type="button" key={value} aria-pressed={view===value} onClick={()=>setView(value)}
+                      className={`rounded-md px-3 py-1.5 text-xs transition-colors ${view===value?'bg-white font-semibold text-ink shadow-soft':'text-slate-500 hover:text-ink'}`}>{label}</button>)}
+                  </div>
+                </div>
+                <div className={`px-4 pb-3 sm:px-5 ${view==='day'?'':'md:hidden'}`}>
+                  <div className="grid grid-cols-5 gap-1 rounded-lg bg-paper p-1">
+                    {dates.map((date,i)=><button type="button" key={date} aria-pressed={selectedDay===i} onClick={()=>setSelectedDay(i)}
+                      className={`rounded-md py-2 text-xs ${selectedDay===i?'bg-white font-semibold text-brand shadow-soft':'text-slate-500 hover:bg-white'}`}>{dayNames[i]} <span className="ml-1 tabular-nums">{parseDate(date).getDate()}</span></button>)}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 sm:px-5">
+                  <div className="flex flex-wrap items-center gap-3 sm:gap-4" aria-label="예약 상태 필터">
+                    {[['all','전체'],['free','예약 가능'],['booked','일반 예약'],['fixed','고정 수업']].map(([value,label])=>(
+                      <button type="button" key={value} onClick={()=>setFilter(value)} aria-pressed={filter===value}
+                        className={`flex items-center gap-1.5 rounded px-0.5 py-1 text-[11px] ${filter===value?'font-semibold text-ink':'text-slate-500 hover:text-ink'}`}>
+                        {value!=='all'&&<span className={`h-2 w-2 rounded-sm border ${value==='free'?'border-[#bbd2c5] bg-white':value==='booked'?'border-[#a4c9b7] bg-[#d8eddf]':'border-slate-300 bg-slate-200'}`}/>}
+                        <span className={filter===value?'underline decoration-brand decoration-2 underline-offset-4':''}>{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="hidden items-center gap-1.5 text-[11px] text-slate-500 xl:flex"><Info size={12} aria-hidden="true"/>시간을 클릭하면 예약 가능 여부와 상세 정보를 볼 수 있어요.</p>
+                </div>
+                {!loading&&!room&&!serverError?(
+                  <div className="border-t border-line px-5 py-14 text-center">
+                    <Grid size={30} className="mx-auto mb-3 text-slate-400" aria-hidden="true"/>
+                    <p className="font-semibold">등록된 특별실이 없습니다</p>
+                    <p className="mt-2 text-xs text-slate-500">{canManage?'특별실을 추가하면 예약을 시작할 수 있습니다.':'관리자에게 특별실 등록을 요청해 주세요.'}</p>
+                    {canManage&&<button type="button" onClick={()=>open('rooms')} className={`${primaryClass} mt-4 text-xs`}><Plus size={15} aria-hidden="true"/>특별실 추가하기</button>}
+                  </div>
+                ):(
+                  <div aria-busy={loading}>
+                    <div className={view==='week'?'hidden md:block':'hidden'}><CalendarTable/></div>
+                    <div className={view==='week'?'md:hidden':''}><CalendarTable single/></div>
+                  </div>
+                )}
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-[#fafbf9] px-4 py-3 text-[11px] text-slate-500 sm:px-5">
+                  <p className="flex items-center gap-1.5"><Lock size={12} aria-hidden="true"/>고정 수업 시간은 일반 예약이 불가능합니다.</p>
+                  <p className="tabular-nums">
+                    {isHosted?(lastSync?`최근 확인 · ${new Intl.DateTimeFormat('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(lastSync)}`:'공용 장부 연결 확인 중')
+                      :data.updatedAt?`이 브라우저에 저장 · ${new Intl.DateTimeFormat('ko-KR',{hour:'2-digit',minute:'2-digit'}).format(new Date(data.updatedAt))}`:'예시 시간표 · 학교의 실제 시간표가 아닙니다'}
+                  </p>
+                </div>
+              </section>
+              <div className="mt-5 grid gap-3 md:grid-cols-2">
+                <div className="flex items-start gap-3 rounded-xl border border-line bg-white p-4">
+                  <span className="mt-0.5 text-brand"><Plus size={18} aria-hidden="true"/></span>
+                  <div><h2 className="text-xs font-semibold">예약은 빈 시간을 클릭해서</h2><p className="mt-1.5 text-xs leading-relaxed text-slate-500">‘예약 가능’ 시간을 선택하고 이름과 수업 목적을 입력하면 됩니다.</p></div>
+                </div>
+                {canManage?(
+                  <button type="button" onClick={()=>open('recurring')} disabled={!available||!room} className="group flex items-start gap-3 rounded-xl border border-line bg-white p-4 text-left hover:border-[#b5cfc3] disabled:opacity-50">
+                    <span className="mt-0.5 text-brand"><RefreshCw size={18} aria-hidden="true"/></span>
+                    <span className="min-w-0 flex-1"><span className="block text-xs font-semibold">매주 같은 수업이라면, 고정 시간표로</span><span className="mt-1.5 block text-xs leading-relaxed text-slate-500">요일과 교시, 적용 기간을 선택해 한 번에 등록하세요.</span></span>
+                    <ArrowRight size={15} className="mt-1 shrink-0 text-slate-400 group-hover:text-brand" aria-hidden="true"/>
+                  </button>
+                ):(
+                  <div className="flex items-start gap-3 rounded-xl border border-line bg-white p-4">
+                    <Lock size={18} className="mt-0.5 shrink-0 text-brand" aria-hidden="true"/>
+                    <div><h2 className="text-xs font-semibold">정규 수업은 고정 시간표로 관리해요</h2><p className="mt-1.5 text-xs leading-relaxed text-slate-500">매주 반복하는 수업은 특별실 담당 관리자에게 등록을 요청하세요.</p></div>
+                  </div>
+                )}
+              </div>
+              <footer className="mt-7 flex flex-wrap justify-between gap-2 text-[11px] text-slate-500">
+                <span>학교공간 · 함께 사용하는 수업 공간</span><span>{isHosted?'Google Sheets · Apps Script 공용 예약':'브라우저 저장 시제품 · 공용 데이터베이스 미연결'}</span>
+              </footer>
+            </main>
+          </div>
+          {modal?.type==='booking'&&bookingRoom&&(
+            <BookingModal key={`${modal.roomId}-${modal.date}-${modal.period}`} slot={modal} room={bookingRoom} data={data} user={user}
+              connected={isHosted} onSave={saveBooking} onDelete={deleteBooking} onClose={()=>setModal(null)}/>
+          )}
+          {modal?.type==='booking'&&!bookingRoom&&(
+            <Modal title="특별실을 확인해 주세요" onClose={()=>setModal(null)}>
+              <div className="p-6"><p className="text-sm leading-7 text-slate-600">특별실 정보가 변경되었거나 연결을 확인해야 합니다. 창을 닫고 캘린더를 갱신해 주세요.</p><button type="button" onClick={()=>setModal(null)} className={`${primaryClass} mt-5`}>확인</button></div>
+            </Modal>
+          )}
+          {modal?.type==='recurring'&&canManage&&<RecurringModal roomId={currentRoomId} data={data} onSave={saveRule} onDelete={deleteRule} onClose={()=>setModal(null)}/>}
+          {modal?.type==='rooms'&&canManage&&(
+            <RoomManagerModal data={data} onCreate={input=>saveRoom(input,false)} onUpdate={input=>saveRoom(input,true)} onDelete={deleteRoom} onClose={()=>setModal(null)}/>
+          )}
+          {modal?.type==='deployment'&&<DeploymentModal data={data} onClose={()=>setModal(null)}/>}
+          <div aria-live="polite" aria-atomic="true" className="pointer-events-none fixed bottom-6 left-4 right-4 z-[60] flex justify-center">
+            {toast&&(
+              <div className="animate-enter pointer-events-auto flex max-w-lg items-center gap-2.5 rounded-xl bg-[#233f34] px-5 py-3.5 text-sm text-white shadow-lg">
+                <CheckCircle size={18} className="shrink-0" aria-hidden="true"/><span>{toast}</span>
+                <button type="button" onClick={()=>setToast('')} className="ml-2 rounded p-1 hover:bg-white/10" aria-label="알림 닫기"><X size={14} aria-hidden="true"/></button>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+</body>
+</html>
